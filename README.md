@@ -1,8 +1,36 @@
+Here’s the updated **README.md** with **RHEL (9.x) marked as “Pending testing”** in the Platform Support section.
+
+---
+
 # Dev Bootstrap Installer
 
 This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a development environment consistently across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
 
 It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, and linters — with **safe append-only config management** (no overwrites) and **clean logging** (no noisy progress bars).
+
+---
+
+## Platform Support & Test Status
+
+* ✅ **Tested**
+
+  * **Fedora 42**
+
+* 🟡 **Pending testing**
+
+  * **RHEL**: 9.x
+
+* ⚠️ **Currently untested**
+
+  * **Rocky Linux**: 9.x
+  * **AlmaLinux**: 9.x
+  * **Ubuntu**: 22.04 LTS, 24.04 LTS
+  * **Debian**: 12 (Bookworm)
+  * **Fedora**: 41, 40
+  * **Linux Mint**: 21.x
+  * **WSL (Ubuntu/Debian)**
+
+> The script is designed to be portable across these families. If something breaks on your distro/version, please open an issue with logs.
 
 ---
 
@@ -25,7 +53,7 @@ It installs and configures common developer tools, Vim plugins, Bash enhancement
 * **Debian/Ubuntu**: `vim`, `git`, `fonts-powerline`, `fzf`, `yamllint`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`
 * **RHEL/Rocky/Fedora**: `vim-enhanced`, `git`, `powerline-fonts`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`
 
-  > If `yamllint` or Powerline fonts aren’t available, see **Fallback Behavior** below.
+> If `yamllint` or Powerline fonts aren’t available, see **Fallback Behavior** below.
 
 ### ✨ Vim Configuration
 
@@ -80,12 +108,11 @@ When a package isn’t available in your distro’s **base** repositories:
 
 * **Powerline glyphs** → installs a **Nerd Font** (default: *FiraCode*) to:
 
-  ```shell
+  ```text
   ~/.local/share/fonts
   ```
 
-  and runs `fc-cache -fv`.
-  Select the Nerd Font (e.g., *FiraCode Nerd Font*) in your terminal profile.
+  and runs `fc-cache -fv`. Select the Nerd Font (e.g., *FiraCode Nerd Font*) in your terminal profile.
 
 These fallbacks avoid system-wide changes and do **not** require EPEL or other extra repos.
 
@@ -167,7 +194,7 @@ PYLINT_VERSION="3.2.6"
 
 ## Example Run
 
-```shell
+```text
 [INFO] Dev Bootstrap starting (append-only; no EPEL required)
 [INFO] OS family: debian (ID=ubuntu)
 [ OK ] Packages installed (system repos only; no EPEL).
