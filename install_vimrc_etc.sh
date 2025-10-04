@@ -472,10 +472,27 @@ ensure_ghostty_dracula_theme(){
       fi
     fi
   fi
-  # Ensure config points at theme
-  local cfg="$cfgdir/config"; mkdir -p "$cfgdir"; touch "$cfg"
+  # --- Normalize Ghostty main config (must be literally named 'config', no extension)
+  local cfg; cfg="$cfgdir/config"
+  mkdir -p "$cfgdir"
+  if [[ ! -f "$cfg" ]]; then
+    shopt -s nullglob
+    for f in "$cfgdir"/config.*; do
+      if [[ -f "$f" ]]; then
+        mv -f "$f" "$cfg"
+        ok "Renamed ${f##*/} -> config"
+        break
+      fi
+    done
+    shopt -u nullglob
+  fi
+
+  # Ensure config points at theme (append once)
+  : > /dev/null  # no-op to keep set -e happy on empty branches
+  [[ -f "$cfg" ]] || : > "$cfg"
   grep -qE '^\s*theme\s*=\s*dracula\s*$' "$cfg" || { echo "theme = dracula" >>"$cfg"; ok "Added 'theme = dracula' to $cfg"; }
 }
+
 install_ghostty(){
   if [[ "$OS_FAMILY" == "redhat" ]]; then install_ghostty_repo_redhat; else install_ghostty_debian; fi
   if [[ "${ENABLE_GHOSTTY_DRACULA:-1}" -eq 1 ]] && command -v ghostty >/dev/null; then ensure_ghostty_dracula_theme; fi
