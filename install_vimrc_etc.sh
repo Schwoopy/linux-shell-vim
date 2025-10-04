@@ -454,9 +454,15 @@ ensure_ghostty_dracula_theme(){
         local src_dir="" src_file="" copied=0
         src_dir="$(find "$tmp" -type d -iname dracula | head -n1 || true)"
         if [[ -n "$src_dir" ]]; then
-          rm -rf "$themes_dir/dracula"
-          cp -a "$src_dir" "$themes_dir/dracula"
-          copied=1
+          # detect nested "themes/dracula.conf" and flatten if needed
+          if [[ -f "$src_dir/themes/dracula.conf" ]]; then
+            cp -f "$src_dir/themes/dracula.conf" "$themes_dir/dracula.conf"
+            copied=1
+          else
+            rm -rf "$themes_dir/dracula"
+            cp -a "$src_dir" "$themes_dir/dracula"
+            copied=1
+          fi
         else
           src_file="$(find "$tmp" -type f \( -iname 'dracula*.conf' -o -iname 'dracula*.toml' -o -iname 'dracula' \) | head -n1 || true)"
           if [[ -n "$src_file" ]]; then
@@ -472,25 +478,14 @@ ensure_ghostty_dracula_theme(){
       fi
     fi
   fi
-  # --- Normalize Ghostty main config (must be literally named 'config', no extension)
-  local cfg; cfg="$cfgdir/config"
-  mkdir -p "$cfgdir"
-  if [[ ! -f "$cfg" ]]; then
-    shopt -s nullglob
-    for f in "$cfgdir"/config.*; do
-      if [[ -f "$f" ]]; then
-        mv -f "$f" "$cfg"
-        ok "Renamed ${f##*/} -> config"
-        break
-      fi
-    done
-    shopt -u nullglob
+  # Ensure config points at theme
+  local cfg="$cfgdir/config"; mkdir -p "$cfgdir"; touch "$cfg"
+  if grep -qE '^\s*theme\s*=\s*dracula\s*$' "$cfg"; then
+    info "Ghostty config already selects Dracula theme"
+  else
+    echo "theme = dracula" >>"$cfg"
+    ok "Added 'theme = dracula' to $cfg"
   fi
-
-  # Ensure config points at theme (append once)
-  : > /dev/null  # no-op to keep set -e happy on empty branches
-  [[ -f "$cfg" ]] || : > "$cfg"
-  grep -qE '^\s*theme\s*=\s*dracula\s*$' "$cfg" || { echo "theme = dracula" >>"$cfg"; ok "Added 'theme = dracula' to $cfg"; }
 }
 
 install_ghostty(){
