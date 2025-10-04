@@ -1,7 +1,3 @@
-Here’s an updated **Changelog** with a new `0.4.1` release for today, capturing the tmux menus/tabs work, Ghostty Dracula caching (no re-download spam), script slimming, and the unbound-var fixes. I left your previous entries intact.
-
----
-
 # Changelog
 
 All notable changes to this project will be documented in this file.
