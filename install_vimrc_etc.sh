@@ -2,18 +2,17 @@
 set -euo pipefail
 
 # ==============================================================================
-# Dev Bootstrap (Non-Interactive, Append-Only, No EPEL dependency)
-# - Appends managed blocks to ~/.bashrc and ~/.vimrc (does NOT overwrite files)
-# - Creates yamllint config only if missing
+# Dev Bootstrap (Append-only, No EPEL)
 # - Vim + Pathogen + plugins
-# - ble.sh (quiet, interactive-only), fzf (user fallback if not packaged)
-# - argcomplete (user), Bash linters (shellcheck, shfmt), Python linters (ruff, pylint)
-# - kubectl + oc installers to /usr/local/bin (or ~/.local/bin fallback) + completions
-# - Writes Makefile + .shellcheckrc to help lint this script
-# - Optimized: no progress bar, clean INFO/WARN/OK logs
+# - bashrc blocks (history/prompt, ble.sh), fzf user fallback, argcomplete
+# - Linters: yamllint (pip fallback), shellcheck, shfmt, ruff, pylint
+# - kubectl + oc (+ completions)
+# - Ghostty (Fedora COPR) + Dracula theme (idempotent, cached failures)
+# - tmux + TPM + Dracula + menus/tabs
+# - Repo tooling (Makefile, .shellcheckrc)
 # ==============================================================================
 
-# --------------------------- CONFIG (edit here) -------------------------------
+# --------------------------- CONFIG ------------------------------------------
 ENABLE_PACKAGES=1
 ENABLE_VIM_PLUGINS=1
 ENABLE_VIMRC=1
@@ -25,27 +24,39 @@ ENABLE_BASH_LINTERS=1
 ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
+ENABLE_GHOSTTY=1
+ENABLE_GHOSTTY_DRACULA=1
+ENABLE_TMUX=1
+ENABLE_TMUX_DRACULA=1
 
-CLEAN_OUTPUT=1                  # 1 = suppress package manager/git noise
-LOG_FILE=""                     # e.g. "/tmp/bootstrap.log" (empty = no file log)
+CLEAN_OUTPUT=1
+LOG_FILE=""   # e.g. /tmp/bootstrap.log
 
 VIM_DIR="$HOME/.vim"
 YAMLLINT_CONF="$HOME/.config/yamllint/config"
-BLE_DIR="$HOME/.local/share/blesh"
 BLE_BUILD_DIR="$HOME/.local/src/ble.sh"
 USER_BASH_COMPLETION_DIR="$HOME/.bash_completion.d"
+TMUX_TPM_DIR="$HOME/.tmux/plugins/tpm"
+TMUX_CONF="$HOME/.tmux.conf"
 
-# Base packages (NO EPEL). Add unzip for Nerd Font fallback.
-PACKAGES_RHEL_BASE=(vim-enhanced git powerline-fonts yamllint curl make gawk bash-completion python3 python3-pip unzip)
-PACKAGES_DEBIAN_BASE=(vim git fonts-powerline fzf yamllint curl make gawk bash-completion python3 python3-pip unzip)
+PACKAGES_RHEL_BASE=(vim-enhanced git powerline-fonts yamllint curl make gawk bash-completion python3 python3-pip unzip tmux)
+PACKAGES_DEBIAN_BASE=(vim git fonts-powerline fzf yamllint curl make gawk bash-completion python3 python3-pip unzip tmux)
 
-# Python linters (pin or empty for latest)
+# Python linters
 RUFF_VERSION="0.6.5"
 PYLINT_VERSION="3.2.6"
 
-# kubectl/oc versions
+# kubectl/oc
 KUBECTL_VERSION="v1.31.1"
 OC_CHANNEL="stable"
+
+# Ghostty
+GHOSTTY_COPR_SHORTHAND="alternateved/ghostty"
+GHOSTTY_DEB_URL=""
+USE_UNOFFICIAL_GHOSTTY_UBUNTU=0
+GHOSTTY_DRACULA_ZIP="https://github.com/dracula/ghostty/archive/refs/heads/main.zip"
+# Force re-download of Dracula theme even if a recent failure is cached:
+#   GHOSTTY_DRACULA_FORCE=1 ./install_vimrc_etc.sh
 
 # Vim plugins (name=url)
 VIM_PLUGIN_LIST="$(cat <<'EOF'
@@ -63,781 +74,617 @@ EOF
 )"
 
 # ==============================================================================
-# Logging helpers
-_have_tty() { [[ -t 1 ]] || [[ -w /dev/tty ]]; }
-_to_tty()   { if [[ -w /dev/tty ]]; then printf "%b" "$*" > /dev/tty; else printf "%b" "$*"; fi; }
-_logfile()  { if [[ -n "$LOG_FILE" ]]; then printf "%b" "$*" >> "$LOG_FILE"; fi; }
-log()  { _to_tty "$*"; _logfile "$*"; }
-info() { log "\033[1;34m[INFO]\033[0m $*\n"; }
-warn() { log "\033[1;33m[WARN]\033[0m $*\n"; }
-ok()   { log "\033[1;32m[ OK ]\033[0m $*\n"; }
-err()  { log "\033[1;31m[ERR ]\033[0m $*\n"; }
+# Logging (-e safe; stdout + optional file)
+[[ -n "$LOG_FILE" ]] && mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+_logfile(){ [[ -n "$LOG_FILE" ]] && printf "%b" "$*" >>"$LOG_FILE" || :; }  # ALWAYS return 0
+_log(){ printf "%b" "$*"; _logfile "$*"; }
+info(){ _log "\033[1;34m[INFO]\033[0m $*\n"; }
+warn(){ _log "\033[1;33m[WARN]\033[0m $*\n"; }
+ok(){   _log "\033[1;32m[ OK ]\033[0m $*\n"; }
+err(){  _log "\033[1;31m[ERR ]\033[0m $*\n"; }
 
-# Prepare log dir if set
-if [[ -n "$LOG_FILE" ]]; then mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true; fi
-
-# Error diagnostics
 trap 'err "Failed: \"$BASH_COMMAND\" at ${BASH_SOURCE[0]}:${LINENO}"' ERR
 
-# Privilege helper
-SUDO() {
-  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-    "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo "$@"
-  else
-    err "Need root for: $* (sudo not available)"; return 1
-  fi
-}
+SUDO(){ if [[ ${EUID:-$(id -u)} -eq 0 ]]; then "$@"; elif command -v sudo >/dev/null; then sudo "$@"; else err "Need root for: $*"; return 1; fi; }
 
-# Exec helper (no bash -c), respects CLEAN_OUTPUT and LOG_FILE
-exec_run() {
+exec_run(){
   if [[ -n "$LOG_FILE" ]]; then
-    if (( CLEAN_OUTPUT )); then "$@" >>"$LOG_FILE" 2>&1; else "$@" 2>&1 | tee -a "$LOG_FILE"; fi
+    (( CLEAN_OUTPUT )) && "$@" >>"$LOG_FILE" 2>&1 || "$@" 2>&1 | tee -a "$LOG_FILE"
   else
-    if (( CLEAN_OUTPUT )); then "$@" >/dev/null 2>&1; else "$@"; fi
+    (( CLEAN_OUTPUT )) && "$@" >/dev/null 2>&1 || "$@"
   fi
 }
 
-# Temp files + cleanup
 TMPFILES=()
-mktempf() { local t; t="$(mktemp)"; TMPFILES+=("$t"); printf '%s' "$t"; }
-cleanup() {
-  for f in "${TMPFILES[@]:-}"; do [[ -n "$f" ]] && rm -f "$f" 2>/dev/null || true; done
-  rm -f /tmp/{kubectl,kubectl.sha256,oc.tar.gz,oc,README.md} 2>/dev/null || true
-}
+mktempf(){ local t; t="$(mktemp)"; TMPFILES+=("$t"); printf '%s' "$t"; }
+cleanup(){ for f in "${TMPFILES[@]:-}"; do [[ -n "$f" ]] && rm -f "$f" 2>/dev/null || true; done
+           rm -f /tmp/{kubectl,kubectl.sha256,oc.tar.gz,oc,ghostty.deb,ghostty-dracula.zip} 2>/dev/null || true; }
 trap cleanup EXIT
 
-backup_file() {
-  local f="$1"
-  if [[ -f "$f" || -L "$f" ]]; then
-    local ts; ts="$(date +%Y%m%d_%H%M%S)"
-    exec_run cp -a "$f" "${f}.bak.${ts}"
-    info "Backed up $f -> ${f}.bak.${ts}"
-  fi
-}
+backup_file(){ local f="$1"; if [[ -f "$f" || -L "$f" ]]; then local ts; ts="$(date +%Y%m%d_%H%M%S)"
+  exec_run cp -a "$f" "${f}.bak.${ts}"; info "Backed up $f -> ${f}.bak.${ts}"; fi; }
 
-# ------------------------------------------------------------------------------
-# Newline-safe block writer (prevents extra blank lines on reruns)
-_write_block_clean() {
-  # $1=file, $2=tmpfile-with-existing-content, $3=start_line, $4=end_line, $5=body
-  local file="$1" tmp="$2" start_line="$3" end_line="$4" body="$5"
-  local prefix=""
-  [[ -s "$tmp" ]] && prefix=$'\n'
-
-  {
-    cat "$tmp"
-    printf '%s%s\n' "$prefix" "$start_line"
-    printf '%s\n' "$body"
-    printf '%s\n' "$end_line"
-    printf '\n'
-  } > "$file"
-
-  # strip all leading blank lines (defensive)
-  local t2; t2="$(mktempf)"
-  awk '
-    BEGIN { seen_nonblank=0 }
-    {
-      if (!seen_nonblank) {
-        if ($0 ~ /^[[:space:]]*$/) next
-        seen_nonblank=1
-      }
-      print
-    }
-  ' "$file" > "$t2" && mv "$t2" "$file"
-}
-
-# Exact-marker upsert (for .bashrc)
-upsert_block() {
-  local file="$1" start="$2" end="$3" content="$4"
-  [[ -f "$file" ]] || : > "$file"
-  backup_file "$file"
-
-  _sed_escape() { printf '%s' "$1" | sed -e 's/[\/&[\].*^$\\]/\\&/g'; }
-  local s_esc e_esc tmp
-  s_esc="$(_sed_escape "$start")"
-  e_esc="$(_sed_escape "$end")"
-
-  tmp="$(mktempf)"
-  sed -e "/^${s_esc}\$/,/^${e_esc}\$/d" "$file" > "$tmp"
-  sed -e "/^${s_esc}\$/d" -e "/^${e_esc}\$/d" "$tmp" > "${tmp}.2" && mv "${tmp}.2" "$tmp"
-
-  _write_block_clean "$file" "$tmp" "$start" "$end" "$content"
-  ok "Updated $file ($start)"
-}
-
-# Greedy Vim upsert: remove FIRST start token..LAST end token, then append once
-upsert_vim_block() {
-  local file="$1" body="$2"
-  [[ -f "$file" ]] || : > "$f"
-  backup_file "$file"
-
+# Greedy token upsert + newline hygiene
+upsert_greedy(){ # $1=file $2=start_token $3=end_token $4=start_line $5=end_line $6=body
+  local file="$1" s="$2" e="$3" sl="$4" el="$5" body="$6"
+  [[ -f "$file" ]] || : >"$file"; backup_file "$file"
   local tmp; tmp="$(mktempf)"
-  awk -v s="DEV_BOOTSTRAP_VIM_START" -v e="DEV_BOOTSTRAP_VIM_END" '
-    { lines[NR]=$0 }
-    {
-      if (index($0, s) && first==0) first=NR;
-      if (index($0, e))            last=NR;
-    }
-    END {
-      for (i=1; i<=NR; i++) {
-        if (first && last && i>=first && i<=last) continue;
-        else if (first && !last && i>=first)      continue;
-        print lines[i];
-      }
-    }
-  ' "$file" > "$tmp"
-
-  _write_block_clean "$file" "$tmp" '" >>> DEV_BOOTSTRAP_VIM_START >>>' '" <<< DEV_BOOTSTRAP_VIM_END <<<' "$body"
-  ok "Ensured single managed Vim block in $file"
+  awk -v s="$s" -v e="$e" '{a[NR]=$0} {if(index($0,s)&&!f)f=NR; if(index($0,e))l=NR}
+       END{for(i=1;i<=NR;i++){if(f&&l&&i>=f&&i<=l)continue; else if(f&&!l&&i>=f)continue; print a[i]}}' "$file" >"$tmp"
+  local s1; s1="$(printf '%s' "$sl" | sed 's/[\/&.^$*[]/\\&/g')"; local e1; e1="$(printf '%s' "$el" | sed 's/[\/&.^$*[]/\\&/g')"
+  sed -e "/^${s1}\$/d" -e "/^${e1}\$/d" "$tmp" > "${tmp}.2" && mv "${tmp}.2" "$tmp"
+  { [[ -s "$tmp" ]] && cat "$tmp" && printf '\n' || cat "$tmp"; printf '%s\n%s\n%s\n\n' "$sl" "$body" "$el"; } >"$file"
+  local t2; t2="$(mktempf)"; awk 'BEGIN{n=0} {if(!n&&$0~/^[[:space:]]*$/)next; n=1; print}' "$file" >"$t2" && mv "$t2" "$file"
+  ok "Updated $file (${s}…${e})"
 }
 
-# Generic greedy token-based upsert (for .bashrc blocks)
-upsert_block_by_token() {
-  # $1=file, $2=start_token, $3=end_token, $4=start_line, $5=end_line, $6=body
-  local file="$1" s_tok="$2" e_tok="$3" start_line="$4" end_line="$5" body="$6"
-  [[ -f "$file" ]] || : > "$file"
-  backup_file "$file"
-
-  local tmp; tmp="$(mktempf)"
-  awk -v s="$s_tok" -v e="$e_tok" '
-    { lines[NR]=$0 }
-    {
-      if (index($0, s) && first==0) first=NR;
-      if (index($0, e))            last=NR;
-    }
-    END {
-      for (i=1; i<=NR; i++) {
-        if (first && last && i>=first && i<=last) continue;
-        else if (first && !last && i>=first)      continue;
-        print lines[i];
-      }
-    }
-  ' "$file" > "$tmp"
-
-  local esc_start esc_end
-  esc_start="$(printf '%s' "$start_line" | sed -e 's/[\/&.^$*[]]/\\&/g')"
-  esc_end="$(printf   '%s' "$end_line"   | sed -e 's/[\/&.^$*[]]/\\&/g')"
-  sed -e "/^${esc_start}\$/d" -e "/^${esc_end}\$/d" "$tmp" > "${tmp}.2" && mv "${tmp}.2" "$tmp"
-
-  _write_block_clean "$file" "$tmp" "$start_line" "$end_line" "$body"
-  ok "Updated $file (${s_tok}…${e_tok})"
-}
-
-# Detect OS
-detect_os() {
+detect_os(){
   . /etc/os-release 2>/dev/null || { err "Missing /etc/os-release"; exit 1; }
-  local id_like="${ID_LIKE:-}"
-  if [[ "$ID" =~ (rhel|rocky|almalinux|centos|fedora) ]] || [[ "$id_like" =~ (rhel|fedora) ]]; then
-    OS_FAMILY="redhat"
-  elif [[ "$ID" =~ (debian|ubuntu|raspbian|linuxmint) ]] || [[ "$id_like" =~ (debian|ubuntu) ]]; then
-    OS_FAMILY="debian"
-  else
-    OS_FAMILY="debian"; warn "Unknown distro; assuming Debian-like."
-  fi
+  local like="${ID_LIKE:-}"
+  if   [[ "$ID" =~ (rhel|rocky|almalinux|centos|fedora) ]] || [[ "$like" =~ (rhel|fedora) ]]; then OS_FAMILY="redhat"
+  elif [[ "$ID" =~ (debian|ubuntu|raspbian|linuxmint) ]] || [[ "$like" =~ (debian|ubuntu) ]]; then OS_FAMILY="debian"
+  else OS_FAMILY="debian"; warn "Unknown distro; assuming Debian-like."; fi
   info "OS family: $OS_FAMILY (ID=${ID})"
 }
 
-# Packages (no EPEL)
-install_packages_common() {
-  mkdir -p "$HOME/.config/yamllint" "$HOME/files" "$VIM_DIR" "$VIM_DIR/autoload" "$VIM_DIR/bundle" \
-           "$HOME/.local/share" "$BLE_DIR" "$BLE_BUILD_DIR" "$USER_BASH_COMPLETION_DIR" || true
-  chmod 0755 "$HOME/.config" "$HOME/.config/yamllint" "$HOME/files" "$VIM_DIR" "$HOME/.local/share" \
-             "$BLE_DIR" "$BLE_BUILD_DIR" "$USER_BASH_COMPLETION_DIR" || true
-  chmod 0750 "$VIM_DIR" "$VIM_DIR/autoload" "$VIM_DIR/bundle" || true
+ensure_local_bin_path(){
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+    export PATH="$HOME/.local/bin:$PATH"
+    [[ -f "$HOME/.bashrc" ]] || : >"$HOME/.bashrc"
+    grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
+    info "Ensured ~/.local/bin on PATH"
+  esac
 }
-install_packages() {
+
+run_if(){ local var="$1"; shift; [[ "${!var:-0}" -eq 1 ]] && { for f in "$@"; do "$f"; done; } || info "Skipping ${*%% *} (disabled)"; }
+
+# ==============================================================================
+# Packages & fallbacks
+install_packages_common(){
+  mkdir -p "$HOME/.config/yamllint" "$VIM_DIR"/{autoload,bundle} "$HOME/.local/share" "$BLE_BUILD_DIR" "$USER_BASH_COMPLETION_DIR" || true
+  chmod 0755 "$HOME/.config" "$HOME/.config/yamllint" "$HOME/.local/share" || true
+  chmod 0750 "$VIM_DIR" "$VIM_DIR"/{autoload,bundle} || true
+}
+install_packages(){
   install_packages_common
   if [[ "$OS_FAMILY" == "redhat" ]]; then
-    if command -v dnf >/dev/null 2>&1; then
-      exec_run SUDO dnf -y -q install "${PACKAGES_RHEL_BASE[@]}" || warn "Some packages not available in base repos."
-    else
-      exec_run SUDO yum -y -q install "${PACKAGES_RHEL_BASE[@]}" || warn "Some packages not available in base repos."
-    fi
+    if command -v dnf >/dev/null; then exec_run SUDO dnf -y -q install "${PACKAGES_RHEL_BASE[@]}" || warn "Some pkgs not in base repos."
+    else exec_run SUDO yum -y -q install "${PACKAGES_RHEL_BASE[@]}" || warn "Some pkgs not in base repos."; fi
   else
-    if (( CLEAN_OUTPUT )); then
-      exec_run SUDO apt-get -qq update
-      exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install "${PACKAGES_DEBIAN_BASE[@]}"
-    else
-      exec_run SUDO apt-get update -y -o Dpkg::Progress-Fancy=1
-      exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Progress-Fancy=1 "${PACKAGES_DEBIAN_BASE[@]}"
-    fi
+    if (( CLEAN_OUTPUT )); then exec_run SUDO apt-get -qq update; exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install "${PACKAGES_DEBIAN_BASE[@]}"
+    else exec_run SUDO apt-get update -y -o Dpkg::Progress-Fancy=1; exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Progress-Fancy=1 "${PACKAGES_DEBIAN_BASE[@]}"; fi
   fi
-  ok "Packages installed (system repos only; no EPEL)."
+  ok "Packages installed."
 }
 
-# fzf fallback (user-scope) if system package missing
-ensure_fzf_user() {
-  if command -v fzf >/dev/null 2>&1; then info "fzf found in PATH"; return 0; fi
-  if [[ -d "$HOME/.fzf" ]]; then info "fzf directory exists at ~/.fzf (assuming installed)"; return 0; fi
-  if ! command -v git >/dev/null 2>&1; then warn "git missing; cannot install fzf user-scope"; return 0; fi
-  info "Installing fzf to ~/.fzf (user-scope; no EPEL)"
+ensure_fzf_user(){
+  command -v fzf >/dev/null && return 0
+  [[ -d "$HOME/.fzf" ]] && return 0
+  command -v git >/dev/null || { warn "git missing; cannot install fzf user-scope"; return 0; }
+  info "Installing fzf to ~/.fzf (user)"
   exec_run git clone -q --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"
   exec_run "$HOME/.fzf/install" --key-bindings --completion --no-update-rc
-  ok "fzf installed to ~/.fzf"
 }
 
-# -------------------- FALLBACKS (no EPEL): yamllint & fonts -------------------
-ensure_pip() {
-  if python3 -m pip --version >/dev/null 2>&1; then return 0; fi
-  if python3 -m ensurepip --version >/dev/null 2>&1; then exec_run python3 -m ensurepip --upgrade; fi
+ensure_pip(){
+  python3 -m pip --version >/dev/null 2>&1 && return 0
+  python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
   if ! python3 -m pip --version >/dev/null 2>&1; then
     if [[ "$OS_FAMILY" == "redhat" ]]; then
-      if command -v dnf >/dev/null 2>&1; then exec_run SUDO dnf -y -q install python3-pip || true
-      else exec_run SUDO yum -y -q install python3-pip || true
-      fi
-    else
-      exec_run SUDO apt-get -qq -y install python3-pip
-    fi
+      if command -v dnf >/dev/null; then exec_run SUDO dnf -y -q install python3-pip || true
+      else exec_run SUDO yum -y -q install python3-pip || true; fi
+    else exec_run SUDO apt-get -qq -y install python3-pip; fi
   fi
   python3 -m pip --version >/dev/null 2>&1 || { err "pip not available"; return 1; }
 }
 
-# --- argcomplete (user-scope) ---
-install_argcomplete() {
-  ensure_pip || { warn "pip unavailable; cannot install argcomplete"; return 1; }
-
-  export PIP_DISABLE_PIP_VERSION_CHECK=1
-  export PIP_ROOT_USER_ACTION=ignore
-
-  info "Installing argcomplete (user-scope)"
-  exec_run python3 -m pip install --user --upgrade --upgrade-strategy only-if-needed argcomplete
-
-  mkdir -p "$USER_BASH_COMPLETION_DIR"
-
-  if command -v activate-global-python-argcomplete >/dev/null 2>&1; then
-    exec_run activate-global-python-argcomplete --dest "$USER_BASH_COMPLETION_DIR"
-    ok "argcomplete activated (user-scope)"
-  else
-    python3 - <<'PY' 2>/dev/null || { warn "argcomplete not importable; skipping user loader"; return 0; }
-import importlib, sys
-try:
-    importlib.import_module("argcomplete"); sys.exit(0)
-except Exception:
-    sys.exit(1)
-PY
-    cat > "$USER_BASH_COMPLETION_DIR/python-argcomplete.sh" <<'EOS'
-# user-scope argcomplete loader
-if command -v register-python-argcomplete >/dev/null 2>&1; then
-  for cmd in pip pip3 python3 git kubectl oc terraform ansible ansible-playbook; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-      eval "$(register-python-argcomplete "$cmd")"
-    fi
-  done
-fi
-EOS
-    ok "argcomplete user loader created at $USER_BASH_COMPLETION_DIR/python-argcomplete.sh"
-  fi
+ensure_yamllint_user(){
+  command -v yamllint >/dev/null && { ok "yamllint present"; return 0; }
+  ensure_pip || { warn "pip unavailable; skip yamllint user install"; return 1; }
+  exec_run python3 -m pip install --user --upgrade yamllint || warn "yamllint pip install failed"
+  ensure_local_bin_path
+  command -v yamllint >/dev/null && ok "yamllint installed (user)"
 }
 
-ensure_yamllint_user() {
-  if command -v yamllint >/dev/null 2>&1; then
-    ok "yamllint already present: $(command -v yamllint)"
-    return 0
-  fi
-  ensure_pip || { warn "pip unavailable; cannot install yamllint user-scope"; return 1; }
-  exec_run python3 -m pip install --user --upgrade yamllint || { warn "Failed installing yamllint via pip"; return 1; }
-  case ":$PATH:" in *":$HOME/.local/bin:"*) : ;; *)
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-    export PATH="$HOME/.local/bin:$PATH"
-    info "Added ~/.local/bin to PATH"
-  esac
-  if command -v yamllint >/dev/null 2>&1; then ok "yamllint installed (user)"; else err "yamllint not found after install"; fi
-}
-
-# --- Nerd Fonts: detect + install (user-scope, idempotent) ---
-font_installed() {
+# Fonts (Nerd Font fallback)
+font_installed(){
   local family="${1:-FiraCode Nerd Font}"
-  if command -v fc-list >/dev/null 2>&1; then
-    if fc-list : family | grep -iFq "$family"; then return 0; fi
-  fi
-  local ufonts="$HOME/.local/share/fonts"
-  if find "$ufonts" -type f \( -iname "*$(echo "$family" | tr -d ' ')*.ttf" -o -iname "*FiraCodeNerdFont*.ttf" \) 2>/dev/null | grep -q .; then
-    return 0
-  fi
+  command -v fc-list >/dev/null 2>&1 && fc-list : family | grep -iFq "$family" && return 0
+  find "$HOME/.local/share/fonts" -type f -iname "*FiraCode*.ttf" 2>/dev/null | grep -q . && return 0
   return 1
 }
-install_nerd_fonts_user() {
-  local family="${1:-FiraCode Nerd Font}"
-  local zip="${2:-FiraCode.zip}"
-  local url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${zip}"
-  local dest="$HOME/.local/share/fonts"
-
-  if font_installed "$family"; then
-    info "Nerd Font already present: $family (skipping download)"
-    return 0
-  fi
-
-  info "Installing Nerd Font (user-scope): $family"
-  mkdir -p "$dest"
-  local tmpd; tmpd="$(mktemp -d)" || { warn "mktemp failed for fonts"; return 1; }
-  (
-    set -e
-    cd "$tmpd"
-    curl -fL --retry 3 --retry-delay 2 -O "$url"
-    unzip -oq "$zip"
-    find . -type f \( -iname "*.ttf" -o -iname "*.otf" \) -exec mv -f {} "$dest"/ \;
-  ) || { warn "Nerd Font download/install failed: ${zip}"; rm -rf "$tmpd"; return 1; }
-  rm -rf "$tmpd"
-  if command -v fc-cache >/dev/null 2>&1; then fc-cache -f "$dest" >/dev/null 2>&1 || true; fi
-  if font_installed "$family"; then ok "Installed Nerd Font: $family"; else warn "Font not visible yet: $family"; fi
+install_nerd_fonts_user(){
+  local family="${1:-FiraCode Nerd Font}" zip="${2:-FiraCode.zip}"
+  font_installed "$family" && { info "Nerd Font present"; return 0; }
+  info "Installing Nerd Font (user): $family"
+  local dest="$HOME/.local/share/fonts"; mkdir -p "$dest"
+  local d; d="$(mktemp -d)"
+  ( set -e; cd "$d"; curl -fL --retry 3 -O "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${zip}"
+    unzip -oq "$zip"; find . -type f -iname "*.ttf" -exec mv -f {} "$dest"/ \; )
+  rm -rf "$d"; command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$dest" >/dev/null 2>&1 || true
+  font_installed "$family" && ok "Installed Nerd Font: $family" || warn "Font not visible yet"
 }
-ensure_powerline_glyphs() {
-  local family="${1:-FiraCode Nerd Font}"
-  local zip="${2:-FiraCode.zip}"
-  if command -v fc-list >/dev/null 2>&1 && fc-list : family | grep -qiE 'Nerd Font|Powerline'; then
-    info "Powerline/Nerd fonts already available (fontconfig)"; return 0
-  fi
-  if fc-list : family 2>/dev/null | grep -qi 'Powerline'; then
-    info "Powerline fonts detected via system fontconfig"; return 0
-  fi
-  install_nerd_fonts_user "$family" "$zip"
+ensure_powerline_glyphs(){
+  command -v fc-list >/dev/null 2>&1 && fc-list : family | grep -qiE 'Nerd Font|Powerline' && return 0
+  install_nerd_fonts_user "FiraCode Nerd Font" "FiraCode.zip"
 }
 
+# ==============================================================================
 # Vim
-ensure_pathogen() {
+ensure_pathogen(){
   local dest="$VIM_DIR/autoload/pathogen.vim"
-  [[ -f "$dest" ]] && { info "Pathogen present."; return 0; }
-  command -v curl >/dev/null 2>&1 || { err "curl is required"; exit 1; }
+  [[ -f "$dest" ]] && { info "Pathogen present"; return 0; }
+  command -v curl >/dev/null || { err "curl required"; exit 1; }
   exec_run curl -fsSL -o "$dest" https://tpo.pe/pathogen.vim
-  ok "Pathogen installed."
+  ok "Pathogen installed"
 }
-deploy_plugins() {
-  command -v git >/dev/null 2>&1 || { err "git is required"; exit 1; }
+deploy_plugins(){
+  command -v git >/dev/null || { err "git required"; exit 1; }
   local line name url dest
   while IFS= read -r line; do
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
-    [[ "$line" != *"="* ]] && { warn "Skipping malformed plugin line: $line"; continue; }
-    name="${line%%=*}"; url="${line#*=}"
-    [[ -z "${name:-}" || -z "${url:-}" ]] && { warn "Skipping broken entry: $line"; continue; }
-    dest="$VIM_DIR/bundle/$name"
-    if [[ -d "$dest/.git" ]]; then
-      exec_run git -C "$dest" pull -q --ff-only || true
-    else
-      exec_run git clone -q --depth 1 "$url" "$dest"
-    fi
+    [[ -z "$line" || "${line:0:1}" == "#" || "$line" != *"="* ]] && continue
+    name="${line%%=*}"; url="${line#*=}"; dest="$VIM_DIR/bundle/$name"
+    if [[ -d "$dest/.git" ]]; then exec_run git -C "$dest" pull -q --ff-only || true
+    else exec_run git clone -q --depth 1 "$url" "$dest"; fi
   done <<< "$VIM_PLUGIN_LIST"
-  ok "Vim plugins ready."
+  ok "Vim plugins ready"
 }
-
-# --- managed Vim block (body-only; markers added by upsert_vim_block) ---
-vimrc_body_block() {
-cat <<'EOF'
-" Managed by install_vimrc_etc.sh — safe to remove or move as you like.
+vimrc_body_block(){ cat <<'EOF'
+" Managed by install_vimrc_etc.sh
 execute pathogen#infect()
 syntax on
 filetype plugin indent on
-
-" Line numbers (traditional)
 set number
 set norelativenumber
-
 set tabstop=2 shiftwidth=2 expandtab
 set cursorline
 set termguicolors
 set background=dark
-" colorscheme requires plugin installed; comment out if you prefer another theme
 silent! colorscheme shades_of_purple
-
 let mapleader=","
 let g:airline#extensions#tabline#enabled = 1
 let g:airline_powerline_fonts = 1
-
-" NERDTree toggle
 nnoremap <leader>n :NERDTreeToggle<CR>
-
-" fzf integration (works with either system fzf or ~/.fzf)
 set rtp+=~/.fzf
 nnoremap <C-p> :Files<CR>
-
-" ALE & indent guides
 let g:ale_sign_column_always = 1
 let g:indentLine_char = '│'
 EOF
 }
-install_vimrc_block() {
-  local f="$HOME/.vimrc"
-  [[ -f "$f" ]] || : > "$f"
-  upsert_vim_block "$f" "$(vimrc_body_block)"
+install_vimrc_block(){
+  upsert_greedy "$HOME/.vimrc" "DEV_BOOTSTRAP_VIM_START" "DEV_BOOTSTRAP_VIM_END" \
+    '" >>> DEV_BOOTSTRAP_VIM_START >>>' '" <<< DEV_BOOTSTRAP_VIM_END <<<' "$(vimrc_body_block)"
 }
 
-# Yamllint config
-write_default_yamllint() {
-cat <<'EOF'
-# --- Managed by install_vimrc_etc.sh ---
-extends: default
-rules:
-  line-length:
-    max: 120
-    allow-non-breakable-words: true
-  truthy:
-    allowed-values: ['true', 'false', 'on', 'off', 'yes', 'no']
-  indentation:
-    spaces: 2
-  document-start: disable
-EOF
-}
-install_yamllint_conf() {
-  if [[ -f "$YAMLLINT_CONF" ]]; then
-    info "yamllint config exists at $YAMLLINT_CONF — leaving it untouched."
-    return 0
-  fi
+# ==============================================================================
+# yamllint
+install_yamllint_conf(){
+  [[ -f "$YAMLLINT_CONF" ]] && { info "yamllint config exists"; return 0; }
   mkdir -p "$(dirname "$YAMLLINT_CONF")"
-  write_default_yamllint > "$YAMLLINT_CONF"
+  cat >"$YAMLLINT_CONF" <<'EOF'
+extends: default
+rules: {line-length: {max: 120, allow-non-breakable-words: true}, truthy: {allowed-values: ['true','false','on','off','yes','no']}, indentation: {spaces: 2}, document-start: disable}
+EOF
   chmod 0640 "$YAMLLINT_CONF" || true
-  ok "Yamllint config created at $YAMLLINT_CONF"
+  ok "Yamllint config at $YAMLLINT_CONF"
 }
 
-# --- Bashrc blocks (token-based greedy upsert) ---
-eternal_history_block() {
-cat <<'EOF'
+# ==============================================================================
+# Bashrc blocks
+eternal_history_block(){ cat <<'EOF'
 export HISTFILESIZE=
 export HISTSIZE=
 export HISTTIMEFORMAT="[%F %T] "
 export HISTFILE=~/.bash_eternal_history
 PROMPT_COMMAND="history -a; $PROMPT_COMMAND"
 HISTCONTROL=erasedups
-
-# Prefer fast git prompt if available (bash-completion)
 if declare -F __git_ps1 >/dev/null 2>&1; then
-  # shellcheck disable=SC2016
   export PS1='╭─╼[\[\e[1;36m\]\w\[\e[0m\]] \[\e[1;34m\]$(__git_ps1 "[%s]")\[\e[0m\]\n╰─ \u@\h >> '
 else
-  parse_git_branch() { git branch --no-color 2>/dev/null | sed -n "s/^\* //p"; }
-  # shellcheck disable=SC2016
+  parse_git_branch(){ git branch --no-color 2>/dev/null | sed -n "s/^\* //p"; }
   export PS1='╭─╼[\[\e[1;36m\]\w\[\e[0m\]] \[\e[1;34m\]$(parse_git_branch)\[\e[0m\]\n╰─ \u@\h >> '
 fi
-
 PROMPT_DIRTRIM=2
 EOF
 }
-ble_bashrc_block() {
-cat <<'EOF'
-# --- ble.sh (Fish-like UX in Bash) ---
-# Load only if present AND only in interactive shells, tune once
+ble_bashrc_block(){ cat <<'EOF'
+# ble.sh (interactive only)
 if [[ $- == *i* ]] && [[ -r "$HOME/.local/share/blesh/ble.sh" ]]; then
-  # shellcheck source=$HOME/.local/share/blesh/ble.sh disable=SC1090
   source "$HOME/.local/share/blesh/ble.sh" --noattach
   ble-attach >/dev/null 2>&1
   if [[ -z "${BLESH_TUNED:-}" ]]; then
-    if declare -F bleopt >/dev/null 2>&1; then
-      bleopt accept-line:char=^M >/dev/null 2>&1
-      bleopt edit_abell=1        >/dev/null 2>&1
-      bleopt complete_menu_style=desc >/dev/null 2>&1
-      bleopt highlight_syntax=always >/dev/null 2>&1
-    fi
-    if declare -F ble-face >/dev/null 2>&1; then
-      ble-face -s autosuggest=fg=242 >/dev/null 2>&1
-    fi
+    bleopt accept-line:char=^M >/dev/null 2>&1 || true
+    bleopt edit_abell=1 >/dev/null 2>&1 || true
+    bleopt complete_menu_style=desc >/dev/null 2>&1 || true
+    bleopt highlight_syntax=always >/dev/null 2>&1 || true
+    ble-face -s autosuggest=fg=242 >/dev/null 2>&1 || true
     BLESH_TUNED=1
   fi
 fi
-
-# enable bash-completion if available (system)
-if [[ -r /usr/share/bash-completion/bash_completion ]]; then
-  # shellcheck source=/usr/share/bash-completion/bash_completion
-  . /usr/share/bash-completion/bash_completion
-fi
-
-# fzf keybindings + completion (system: Debian vs Fedora layout)
-if [[ -r /usr/share/fzf/completion.bash ]]; then
-  # shellcheck source=/usr/share/fzf/completion.bash
-  source /usr/share/fzf/completion.bash
-elif [[ -r /usr/share/fzf/shell/completion.bash ]]; then
-  # shellcheck source=/usr/share/fzf/shell/completion.bash
-  source /usr/share/fzf/shell/completion.bash
-fi
-
-if [[ -r /usr/share/fzf/key-bindings.bash ]]; then
-  # shellcheck source=/usr/share/fzf/key-bindings.bash
-  source /usr/share/fzf/key-bindings.bash
-elif [[ -r /usr/share/fzf/shell/key-bindings.bash ]]; then
-  # shellcheck source=/usr/share/fzf/shell/key-bindings.bash
-  source /usr/share/fzf/shell/key-bindings.bash
-fi
-
-# fzf user-scope integration (if installed via ~/.fzf/install)
-if [[ -r "$HOME/.fzf/shell/completion.bash" ]]; then
-  # shellcheck source=$HOME/.fzf/shell/completion.bash disable=SC1090
-  source "$HOME/.fzf/shell/completion.bash"
-fi
-if [[ -r "$HOME/.fzf/shell/key-bindings.bash" ]]; then
-  # shellcheck source=$HOME/.fzf/shell/key-bindings.bash disable=SC1090
-  source "$HOME/.fzf/shell/key-bindings.bash"
-fi
-
-# user-scope argcomplete (generated in ~/.bash_completion.d)
+# bash-completion (system)
+[[ -r /usr/share/bash-completion/bash_completion ]] && . /usr/share/bash-completion/bash_completion
+# fzf bindings (system or user)
+for p in /usr/share/fzf/completion.bash /usr/share/fzf/shell/completion.bash "$HOME/.fzf/shell/completion.bash"; do [[ -r "$p" ]] && source "$p"; done
+for p in /usr/share/fzf/key-bindings.bash /usr/share/fzf/shell/key-bindings.bash "$HOME/.fzf/shell/key-bindings.bash"; do [[ -r "$p" ]] && source "$p"; done
+# user argcomplete loaders
 if [[ $- == *i* ]] && [[ -d "$HOME/.bash_completion.d" ]]; then
-  for f in "$HOME"/.bash_completion.d/*; do
-    [[ -r "$f" ]] && . "$f"
-  done
+  for f in "$HOME"/.bash_completion.d/*; do [[ -r "$f" ]] && . "$f"; done
 fi
-
-# carapace (optional; put 'carapace' on PATH first)
 command -v carapace >/dev/null && eval "$(carapace _carapace)"
 EOF
 }
-install_bashrc_block() {
-  local f="$HOME/.bashrc"
-  [[ -f "$f" ]] || : > "$f"
-  upsert_block_by_token \
-    "$f" \
-    "ETERNAL_HISTORY_AND_GIT_PROMPT_START" \
-    "ETERNAL_HISTORY_AND_GIT_PROMPT_END" \
-    "# >>> ETERNAL_HISTORY_AND_GIT_PROMPT_START >>>" \
-    "# <<< ETERNAL_HISTORY_AND_GIT_PROMPT_END <<<" \
-    "$(eternal_history_block)"
+install_bashrc_block(){
+  upsert_greedy "$HOME/.bashrc" "ETERNAL_HISTORY_AND_GIT_PROMPT_START" "ETERNAL_HISTORY_AND_GIT_PROMPT_END" \
+    "# >>> ETERNAL_HISTORY_AND_GIT_PROMPT_START >>>" "# <<< ETERNAL_HISTORY_AND_GIT_PROMPT_END <<<" "$(eternal_history_block)"
 }
-install_ble_bashrc_block() {
-  local f="$HOME/.bashrc"
-  [[ -f "$f" ]] || : > "$f"
-  upsert_block_by_token \
-    "$f" \
-    "BLE_SH_START" \
-    "BLE_SH_END" \
-    "# >>> BLE_SH_START >>>" \
-    "# <<< BLE_SH_END <<<" \
-    "$(ble_bashrc_block)"
+install_ble_bashrc_block(){
+  upsert_greedy "$HOME/.bashrc" "BLE_SH_START" "BLE_SH_END" \
+    "# >>> BLE_SH_START >>>" "# <<< BLE_SH_END <<<" "$(ble_bashrc_block)"
 }
 
+# ==============================================================================
 # ble.sh
-install_ble() {
-  command -v git  >/dev/null 2>&1 || { err "git required for ble.sh"; exit 1; }
-  (command -v gawk >/dev/null 2>&1 || command -v awk >/dev/null 2>&1) || { err "gawk/awk required for ble.sh"; exit 1; }
-  command -v make >/dev/null 2>&1 || { err "make required for ble.sh"; exit 1; }
-  if [[ -d "$BLE_BUILD_DIR/.git" ]]; then
-    info "Updating ble.sh in $BLE_BUILD_DIR"
-    exec_run git -C "$BLE_BUILD_DIR" pull -q --ff-only || true
-  else
-    exec_run mkdir -p "$(dirname "$BLE_BUILD_DIR")"
-    info "Cloning ble.sh"
-    exec_run git clone -q --recursive --depth 1 --shallow-submodules https://github.com/akinomyoga/ble.sh.git "$BLE_BUILD_DIR"
-  fi
-  local prefix="$HOME/.local"
-  info "Installing ble.sh to $prefix"
-  exec_run make -s -C "$BLE_BUILD_DIR" install PREFIX="$prefix"
+install_ble(){
+  command -v git >/dev/null || { err "git required"; exit 1; }
+  (command -v gawk >/dev/null || command -v awk >/dev/null) || { err "gawk/awk required"; exit 1; }
+  command -v make >/dev/null || { err "make required"; exit 1; }
+  if [[ -d "$BLE_BUILD_DIR/.git" ]]; then info "Updating ble.sh"; exec_run git -C "$BLE_BUILD_DIR" pull -q --ff-only || true
+  else exec_run mkdir -p "$(dirname "$BLE_BUILD_DIR")"; info "Cloning ble.sh"; exec_run git clone -q --recursive --depth 1 --shallow-submodules https://github.com/akinomyoga/ble.sh.git "$BLE_BUILD_DIR"; fi
+  exec_run make -s -C "$BLE_BUILD_DIR" install PREFIX="$HOME/.local"
   [[ -r "$HOME/.local/share/blesh/ble.sh" ]] || { err "ble.sh install failed"; exit 1; }
-  ok "ble.sh installed."
+  ok "ble.sh installed"
 }
 
-# Python linters (+ PATH handling + reinstall + verify)
-install_python_linters() {
-  ensure_pip || return 1
-  local ruff_spec="ruff";   [[ -n "$RUFF_VERSION"   ]] && ruff_spec="ruff==${RUFF_VERSION}"
-  local pyl_spec="pylint";  [[ -n "$PYLINT_VERSION" ]] && pyl_spec="pylint==${PYLINT_VERSION}"
-  info "Installing Python linters: ${ruff_spec} ${pyl_spec} (user-scope)"
-  exec_run python3 -m pip install --user --upgrade ${ruff_spec} ${pyl_spec}
-
-  # Ensure ~/.local/bin on PATH (one-off + persist)
-  case ":$PATH:" in
-    *":$HOME/.local/bin:"*) : ;;
-    *)
-      export PATH="$HOME/.local/bin:$PATH"
-      info "Added ~/.local/bin to PATH (current shell)"
-      if ! grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.bashrc" 2>/dev/null; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-        info "Appended PATH export to ~/.bashrc"
-      fi
-      hash -r || true
-      ;;
-  esac
-
-  # If still missing, reinstall explicitly with pinned versions
-  if ! command -v ruff >/dev/null 2>&1 || ! command -v pylint >/dev/null 2>&1; then
-    warn "ruff/pylint not visible yet; reinstalling explicitly to user site"
-    local re_ruff="ruff"; [[ -n "$RUFF_VERSION" ]] && re_ruff="ruff==${RUFF_VERSION}"
-    local re_pyl="pylint"; [[ -n "$PYLINT_VERSION" ]] && re_pyl="pylint==${PYLINT_VERSION}"
-    exec_run python3 -m pip install --user --upgrade "$re_ruff" "$re_pyl"
-    hash -r || true
-  fi
-
-  # Verify
-  if command -v ruff >/dev/null 2>&1; then
-    ok "ruff installed ($(ruff --version 2>/dev/null | awk '{print $2}'))"
-  else
-    warn "ruff missing (ensure ~/.local/bin is on PATH)"
-  fi
-  if command -v pylint >/dev/null 2>&1; then
-    ok "pylint installed ($(pylint --version 2>/dev/null | awk 'NR==1{print $2}'))"
-  else
-    warn "pylint missing (ensure ~/.local/bin is on PATH)"
-  fi
+# ==============================================================================
+# Python linters
+install_python_linters(){
+  ensure_pip || return 1; ensure_local_bin_path
+  local ruff_spec="${RUFF_VERSION:+ruff==$RUFF_VERSION}"; [[ -z "$ruff_spec" ]] && ruff_spec="ruff"
+  local pyl_spec="${PYLINT_VERSION:+pylint==$PYLINT_VERSION}"; [[ -z "$pyl_spec" ]] && pyl_spec="pylint"
+  info "Installing Python linters (user): $ruff_spec $pyl_spec"
+  exec_run python3 -m pip install --user --upgrade "$ruff_spec" "$pyl_spec"
+  hash -r || true
+  command -v ruff >/dev/null 2>&1 && ok "ruff installed ($(ruff --version 2>/dev/null | awk '{print $2}'))" || warn "ruff missing"
+  command -v pylint >/dev/null 2>&1 && ok "pylint installed ($(pylint --version 2>/dev/null | awk 'NR==1{print $2}'))" || warn "pylint missing"
 }
 
+# ==============================================================================
 # Bash linters
-install_bash_linters() {
+install_bash_linters(){
   info "Installing Bash linters (shellcheck, shfmt)"
   if [[ "$OS_FAMILY" == "redhat" ]]; then
-    if command -v dnf >/dev/null 2>&1; then
-      exec_run SUDO dnf -y -q install shellcheck || warn "shellcheck not available in base repos"
-      exec_run SUDO dnf -y -q install shfmt      || warn "shfmt not available in base repos"
-    else
-      exec_run SUDO yum -y -q install shellcheck || warn "shellcheck not available in base repos"
-      exec_run SUDO yum -y -q install shfmt      || warn "shfmt not available in base repos"
-    fi
+    if command -v dnf >/dev/null; then exec_run SUDO dnf -y -q install shellcheck || warn "shellcheck unavailable"; exec_run SUDO dnf -y -q install shfmt || warn "shfmt unavailable"
+    else exec_run SUDO yum -y -q install shellcheck || warn "shellcheck unavailable"; exec_run SUDO yum -y -q install shfmt || warn "shfmt unavailable"; fi
   else
-    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shellcheck || warn "shellcheck not available"
-    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shfmt      || warn "shfmt not available"
+    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shellcheck || warn "shellcheck unavailable"
+    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shfmt || warn "shfmt unavailable"
   fi
-  command -v shellcheck >/dev/null 2>&1 && ok "shellcheck installed" || warn "shellcheck missing (consider manual install)"
-  command -v shfmt      >/dev/null 2>&1 && ok "shfmt installed"      || warn "shfmt missing (consider manual install)"
+  command -v shellcheck >/dev/null && ok "shellcheck installed" || warn "shellcheck missing"
+  command -v shfmt >/dev/null && ok "shfmt installed" || warn "shfmt missing"
 }
 
-# Arch detection + safe fetch
+# ==============================================================================
+# kubectl + oc
 K_ARCH="amd64"
-detect_arch() {
-  local u; u="$(uname -m)"
-  case "$u" in
-    x86_64|amd64)   K_ARCH="amd64" ;;
-    aarch64|arm64)  K_ARCH="arm64" ;;
-    armv7l)         K_ARCH="arm"   ;;
-    ppc64le)        K_ARCH="ppc64le" ;;
-    s390x)          K_ARCH="s390x" ;;
-    *)              K_ARCH="amd64"; warn "Unknown arch $u; defaulting to amd64" ;;
+detect_arch(){
+  case "$(uname -m)" in
+    x86_64|amd64) K_ARCH="amd64" ;;
+    aarch64|arm64) K_ARCH="arm64" ;;
+    armv7l) K_ARCH="arm" ;;
+    ppc64le) K_ARCH="ppc64le" ;;
+    s390x) K_ARCH="s390x" ;;
+    *) K_ARCH="amd64"; warn "Unknown arch; defaulting to amd64" ;;
   esac
 }
-fetch() { # fetch <url> <dest>
-  curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 -H 'User-Agent: dev-bootstrap/1.0' -o "$2" "$1"
-}
-
-# kubectl + oc installers (to /usr/local/bin or ~/.local/bin) + bash-completions
-install_oc_kubectl() {
+fetch(){ curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 -H 'User-Agent: dev-bootstrap/1.0' -o "$2" "$1"; }
+install_oc_kubectl(){
   detect_arch
   local sysbindir="/usr/local/bin"
   local userbindir="$HOME/.local/bin"
-  local bindir
-  bindir="$sysbindir"
-
-  if ! SUDO test -w "$sysbindir" >/dev/null 2>&1; then
-    bindir="$userbindir"
-    mkdir -p "$bindir"
-    case ":$PATH:" in *":$bindir:"*) : ;; *)
-      warn "Add $bindir to PATH: export PATH=\"$bindir:\$PATH\""
-    esac
-    info "Using user install dir $bindir (no root write)."
-  fi
-
+  local bindir="$sysbindir"
+  if ! SUDO test -w "$sysbindir" >/dev/null 2>&1; then bindir="$userbindir"; mkdir -p "$bindir"; warn "Add $bindir to PATH if needed"; fi
   local kubectl_url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${K_ARCH}/kubectl"
   local oc_url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_CHANNEL}/openshift-client-linux.tar.gz"
 
-  # kubectl
-  if ! command -v kubectl >/dev/null 2>&1; then
-    fetch "$kubectl_url" /tmp/kubectl
-    chmod +x /tmp/kubectl
-    SUDO mv /tmp/kubectl "$bindir/kubectl"
-    ok "kubectl installed to $bindir/kubectl"
+  if ! command -v kubectl >/dev/null; then
+    fetch "$kubectl_url" /tmp/kubectl; chmod +x /tmp/kubectl; SUDO mv /tmp/kubectl "$bindir/kubectl"; ok "kubectl -> $bindir/kubectl"
     if curl -fsSL "https://dl.k8s.io/${KUBECTL_VERSION}/bin/linux/${K_ARCH}/kubectl.sha256" -o /tmp/kubectl.sha256; then
-      (cd /tmp && sha256sum -c --status kubectl.sha256 2>/dev/null) || warn "kubectl checksum mismatch (continuing)."
+      (cd /tmp && sha256sum -c --status kubectl.sha256 2>/dev/null) || warn "kubectl checksum mismatch."
     fi
-  else
-    ok "kubectl already present"
-  fi
+  else ok "kubectl already present"; fi
 
-  # oc
-  if ! command -v oc >/dev/null 2>&1; then
-    fetch "$oc_url" /tmp/oc.tar.gz
-    tar -xzf /tmp/oc.tar.gz -C /tmp oc 2>/dev/null || true
-    if [[ -f /tmp/oc ]]; then
-      chmod +x /tmp/oc
-      SUDO mv /tmp/oc "$bindir/oc"
-      ok "oc installed to $bindir/oc"
-    else
-      warn "oc binary not found in archive; skipping."
-    fi
-  else
-    ok "oc already present"
-  fi
+  if ! command -v oc >/dev/null; then
+    fetch "$oc_url" /tmp/oc.tar.gz; tar -xzf /tmp/oc.tar.gz -C /tmp oc 2>/dev/null || true
+    [[ -f /tmp/oc ]] && { chmod +x /tmp/oc; SUDO mv /tmp/oc "$bindir/oc"; ok "oc -> $bindir/oc"; } || warn "oc not found in archive"
+  else ok "oc already present"; fi
 
-  # completions (user-scope)
   mkdir -p "$USER_BASH_COMPLETION_DIR"
-  if command -v kubectl >/dev/null 2>&1; then
-    kubectl completion bash > "$USER_BASH_COMPLETION_DIR/kubectl" || true
-    ok "kubectl completion saved to $USER_BASH_COMPLETION_DIR/kubectl"
-  fi
-  if command -v oc >/dev/null 2>&1; then
-    oc completion bash > "$USER_BASH_COMPLETION_DIR/oc" || true
-    ok "oc completion saved to $USER_BASH_COMPLETION_DIR/oc"
-  fi
+  command -v kubectl >/dev/null && kubectl completion bash >"$USER_BASH_COMPLETION_DIR/kubectl" || true
+  command -v oc >/dev/null && oc completion bash >"$USER_BASH_COMPLETION_DIR/oc" || true
+  ok "kubectl/oc completions saved"
 }
 
-# Repo tooling (Makefile + .shellcheckrc) next to this script
-write_repo_tooling() {
-  local script_path="${BASH_SOURCE[0]:-$(pwd)/install_vimrc_etc.sh}"
-  local script_dir; script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+# ==============================================================================
+# Ghostty + Dracula
+enable_copr_ghostty(){
+  command -v dnf >/dev/null || return 1
+  exec_run SUDO dnf -y -q install dnf-plugins-core || true
+  exec_run SUDO dnf -y copr enable "$GHOSTTY_COPR_SHORTHAND" || exec_run SUDO dnf -y copr enable "copr:copr.fedorainfracloud.org:${GHOSTTY_COPR_SHORTHAND/:/:}"
+}
+install_ghostty_repo_redhat(){
+  info "Enabling Ghostty COPR: $GHOSTTY_COPR_SHORTHAND"
+  enable_copr_ghostty && exec_run SUDO dnf -y --setopt=tsflags=nodocs install ghostty || err "Failed to enable/install Ghostty"
+  command -v ghostty >/dev/null && ok "ghostty installed" || err "ghostty install failed"
+}
+install_ghostty_debian(){
+  if [[ -n "$GHOSTTY_DEB_URL" ]]; then
+    info "Installing ghostty from .deb"; fetch "$GHOSTTY_DEB_URL" /tmp/ghostty.deb
+    exec_run SUDO apt-get -qq -y install /tmp/ghostty.deb || exec_run SUDO dpkg -i /tmp/ghostty.deb
+    command -v ghostty >/dev/null && ok "ghostty installed (.deb)" || err "ghostty .deb install failed"
+  elif [[ "${USE_UNOFFICIAL_GHOSTTY_UBUNTU:-0}" -eq 1 ]]; then
+    warn "Using community installer for ghostty (Ubuntu/Debian)"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mkasberg/ghostty-ubuntu/HEAD/install.sh)" || warn "ghostty unofficial install failed"
+    command -v ghostty >/devNull && ok "ghostty installed (community)" || err "ghostty community install failed"
+  else
+    warn "No official ghostty path for Debian/Ubuntu in this script."
+  fi
+}
+ensure_ghostty_dracula_theme(){
+  # split locals to avoid set -u “unbound” during same-line expansions
+  local cfgdir;      cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/ghostty"
+  local themes_dir;  themes_dir="$cfgdir/themes"
+  local stamp;       stamp="$themes_dir/.dracula_not_found"
+
+  mkdir -p "$themes_dir"
+  # Already installed?
+  if [[ -d "$themes_dir/dracula" ]] || compgen -G "$themes_dir/dracula.*" >/dev/null 2>&1; then
+    :
+  else
+    # Recent failure? skip for 7 days unless forced
+    if [[ -f "$stamp" && "${GHOSTTY_DRACULA_FORCE:-0}" -ne 1 ]] && find "$stamp" -mtime -7 | grep -q .; then
+      info "Ghostty Dracula previously not found; skipping (force with GHOSTTY_DRACULA_FORCE=1)."
+    else
+      rm -f "$stamp" || true
+      info "Installing Ghostty Dracula theme"
+      local zip="/tmp/ghostty-dracula.zip"
+      local tmp; tmp="$(mktemp -d)"
+      if curl -fL --retry 3 --retry-delay 2 -o "$zip" "$GHOSTTY_DRACULA_ZIP"; then
+        unzip -oq "$zip" -d "$tmp"
+        local src_dir="" src_file="" copied=0
+        src_dir="$(find "$tmp" -type d -iname dracula | head -n1 || true)"
+        if [[ -n "$src_dir" ]]; then
+          rm -rf "$themes_dir/dracula"
+          cp -a "$src_dir" "$themes_dir/dracula"
+          copied=1
+        else
+          src_file="$(find "$tmp" -type f \( -iname 'dracula*.conf' -o -iname 'dracula*.toml' -o -iname 'dracula' \) | head -n1 || true)"
+          if [[ -n "$src_file" ]]; then
+            local ext=".conf"; [[ "$src_file" =~ \.toml$ ]] && ext=".toml"
+            cp -f "$src_file" "$themes_dir/dracula${ext}"
+            copied=1
+          fi
+        fi
+        rm -rf "$zip" "$tmp"
+        [[ $copied -eq 1 ]] && ok "Dracula theme installed to $themes_dir" || { warn "Dracula not found in archive; caching failure."; : >"$stamp"; }
+      else
+        warn "Failed to download Dracula archive"
+      fi
+    fi
+  fi
+  # Ensure config points at theme
+  local cfg="$cfgdir/config"; mkdir -p "$cfgdir"; touch "$cfg"
+  grep -qE '^\s*theme\s*=\s*dracula\s*$' "$cfg" || { echo "theme = dracula" >>"$cfg"; ok "Added 'theme = dracula' to $cfg"; }
+}
+install_ghostty(){
+  if [[ "$OS_FAMILY" == "redhat" ]]; then install_ghostty_repo_redhat; else install_ghostty_debian; fi
+  if [[ "${ENABLE_GHOSTTY_DRACULA:-1}" -eq 1 ]] && command -v ghostty >/dev/null; then ensure_ghostty_dracula_theme; fi
+}
+
+# ==============================================================================
+# tmux + TPM + Dracula + Menus/Tabs
+ensure_tpm(){
+  if [[ -d "$TMUX_TPM_DIR/.git" ]]; then exec_run git -C "$TMUX_TPM_DIR" pull -q --ff-only || true
+  else command -v git >/dev/null || { warn "git missing; cannot install TPM"; return 1; }
+       exec_run mkdir -p "$TMUX_TPM_DIR"
+       exec_run git clone -q --depth 1 https://github.com/tmux-plugins/tpm "$TMUX_TPM_DIR"; fi
+  ok "TPM ready"
+}
+tmux_conf_body_block(){ cat <<'EOF'
+# Managed by install_vimrc_etc.sh — safe to edit/move or remove the whole block.
+#
+# TMUX QUICK INSTRUCTIONS (tabs + menus)
+# - New tab (window): Prefix + c
+# - Rename tab:       Prefix + ,
+# - Next/Prev tab:    Alt+Right / Alt+Left  (also: C-NPage / C-PPage)
+# - Session/window tree: Prefix + w
+# - Mega-menu:        Prefix + m
+# - Mouse menus:      Right-click on status bar (tab) or inside a pane
+# - Reload config:    Prefix + m → R
+# - Toggle sync:      Prefix + m → s
+##### Basics
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",xterm-256color:RGB,tmux-256color:RGB"
+set -g mouse on
+set -g history-limit 100000
+set -g status-interval 5
+set -g renumber-windows on
+
+# Vi copy-mode + quick copy
+setw -g mode-keys vi
+bind -T copy-mode-vi y send-keys -X copy-selection-and-cancel
+
+##### “Tabs” (windows) look & feel
+set -g status on
+set -g status-position top
+set -g status-style fg=default,bg=default
+set -g window-status-style fg=colour245,bg=default
+set -g window-status-format " #I:#W "
+set -g window-status-current-style fg=colour231,bg=colour61,bold
+set -g window-status-current-format " #I:#W "
+set -g window-status-separator ""
+
+# Navigate tabs (windows)
+bind -n M-Left  previous-window
+bind -n M-Right next-window
+bind C-PPage    previous-window
+bind C-NPage    next-window
+
+# New/rename/move tabs
+bind c new-window
+bind , command-prompt -I "#W" "rename-window '%%'"
+bind < swap-window -t -1 \; select-window -t -1
+bind > swap-window -t +1 \; select-window -t +1
+
+##### Quick session/window “tree” chooser
+bind w choose-tree -Zw
+
+##### Mega-menu (Prefix + m)
+bind m display-menu -T "#[align=centre]TMUX MENU" \
+  "New tab (window)"      c  new-window \
+  "Split ─ horizontally"  "-" split-window -v \
+  "Split │ vertically"    "|" split-window -h \
+  "" \
+  "Next tab →"            n  next-window \
+  "Prev tab ←"            p  previous-window \
+  "Rename tab…"           r  command-prompt -I "#W" "rename-window '%%'" \
+  "" \
+  "Toggle sync panes"     s  "run-shell 'tmux set -g synchronize-panes; tmux display-message \"sync-panes: #{?synchronize-panes,on,off}\"'" \
+  "Choose session/tree"   w  "choose-tree -Zw" \
+  "" \
+  "Reload ~/.tmux.conf"   R  "source-file ~/.tmux.conf \; display-message \"reloaded tmux.conf\"" \
+  "Kill pane"             x  kill-pane \
+  "Kill tab (window)"     X  kill-window
+
+##### Mouse right-click menus
+# Status bar (on a tab)
+bind -n MouseDown3Status display-menu -T "#[align=centre]Tab: #I #W" -x W -y S \
+  "New tab"         c  new-window \
+  "Rename tab…"     r  command-prompt -I "#W" "rename-window '%%'" \
+  "Move tab left"   <  "swap-window -t -1 \; select-window -t -1" \
+  "Move tab right"  >  "swap-window -t +1 \; select-window -t +1" \
+  "" \
+  "Close tab"       X  kill-window
+
+# In a pane
+bind -n MouseDown3Pane display-menu -T "#[align=centre]Pane • #{pane_index}" \
+  "Split ─ horizontally"    "-" split-window -v \
+  "Split │ vertically"      "|" split-window -h \
+  "Toggle sync panes"       s  "run-shell 'tmux set -g synchronize-panes; tmux display-message \"sync-panes: #{?synchronize-panes,on,off}\"'" \
+  "" \
+  "Zoom pane"               z  resize-pane -Z \
+  "Kill pane"               x  kill-pane
+
+##### Plugins (TPM + Dracula theme)
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'dracula/tmux'
+set -g @dracula-show-network false
+set -g @dracula-plugins "battery,cpu,ram,git"
+set -g @dracula-refresh-rate 5
+set -g @dracula-fixed_location_status false
+set -g @dracula-show-powerline true
+
+# Initialize TPM (keep at end of plugin list)
+run '~/.tmux/plugins/tpm/tpm'
+EOF
+}
+install_tmux_conf_block(){
+  upsert_greedy "$TMUX_CONF" "DEV_BOOTSTRAP_TMUX_START" "DEV_BOOTSTRAP_TMUX_END" \
+    "# >>> DEV_BOOTSTRAP_TMUX_START >>>" "# <<< DEV_BOOTSTRAP_TMUX_END <<<" "$(tmux_conf_body_block)"
+}
+install_tmux_plugins_quiet(){
+  [[ -x "$TMUX_TPM_DIR/bin/install_plugins" ]] || { warn "TPM installer missing"; return 0; }
+  (( CLEAN_OUTPUT )) && "$TMUX_TPM_DIR/bin/install_plugins" >/dev/null 2>&1 || "$TMUX_TPM_DIR/bin/install_plugins" || true
+  ok "tmux plugins installed/updated"
+}
+install_tmux(){
+  command -v tmux >/dev/null || warn "tmux binary not found after package step"
+  ensure_tpm; install_tmux_conf_block
+  [[ "${ENABLE_TMUX_DRACULA:-1}" -eq 1 ]] && install_tmux_plugins_quiet
+  ok "tmux configured. Start with: tmux"
+}
+
+# ==============================================================================
+# Repo tooling
+write_repo_tooling(){
+  local script_path="${BASH_SOURCE[0]:-$(pwd)/install_vimrc_etc.sh}" script_dir
+  script_dir="$(cd "$(dirname "$script_path")" && pwd)"
   cat > "${script_dir}/Makefile" <<'MK'
 SHELL := /usr/bin/env bash
 SHELLCHECK ?= shellcheck
 SH_SOURCES := install_vimrc_etc.sh
-
-.PHONY: check-sh
-check-sh:
-	@bash -n $(SH_SOURCES)
-
-.PHONY: lint-sh
-lint-sh:
-	@$(SHELLCHECK) -x -S style -s bash $(SH_SOURCES)
-
-.PHONY: fmt-sh
-fmt-sh:
-	@command -v shfmt >/dev/null 2>&1 && shfmt -w -i 2 -ci -bn $(SH_SOURCES) || { echo "shfmt not installed; skipping."; }
+.PHONY: check-sh lint-sh fmt-sh
+check-sh: ; @bash -n $(SH_SOURCES)
+lint-sh:  ; @$(SHELLCHECK) -x -S style -s bash $(SH_SOURCES)
+fmt-sh:   ; @command -v shfmt >/dev/null 2>&1 && shfmt -w -i 2 -ci -bn $(SH_SOURCES) || { echo "shfmt not installed; skipping."; }
 MK
-  cat > "${script_dir}/.shellcheckrc" <<'RC'
-# Allow following external sources when paths are validated in code
-external-sources=true
-RC
-  ok "Repo tooling written: Makefile and .shellcheckrc"
+  echo "external-sources=true" > "${script_dir}/.shellcheckrc"
+  ok "Repo tooling written"
 }
 
-# Source bashrc safely
-safe_source_bashrc() {
-  if [[ -r "$HOME/.bashrc" ]]; then
-    set +u; BASHRCSOURCED=1; . "$HOME/.bashrc" || true; set -u
+safe_source_bashrc(){ [[ -r "$HOME/.bashrc" ]] && { set +u; . "$HOME/.bashrc" || true; set -u; } || warn "~/.bashrc missing"; }
+
+# ------------------------------------------------------------------------------
+# argcomplete (kept last)
+install_argcomplete(){
+  ensure_pip || { warn "pip unavailable; cannot install argcomplete"; return 1; }
+  export PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_ROOT_USER_ACTION=ignore
+  info "Installing argcomplete (user)"
+  exec_run python3 -m pip install --user --upgrade --upgrade-strategy only-if-needed argcomplete
+  mkdir -p "$USER_BASH_COMPLETION_DIR"
+  if command -v activate-global-python-argcomplete >/dev/null; then
+    exec_run activate-global-python-argcomplete --dest "$USER_BASH_COMPLETION_DIR"
   else
-    warn "~/.bashrc not found; skipping source."
+    python3 - <<'PY' 2>/dev/null || true
+import importlib, sys
+sys.exit(0 if importlib.util.find_spec("argcomplete") else 1)
+PY
+    cat > "$USER_BASH_COMPLETION_DIR/python-argcomplete.sh" <<'EOS'
+if command -v register-python-argcomplete >/dev/null 2>&1; then
+  for cmd in pip pip3 python3 git kubectl oc terraform ansible ansible-playbook; do
+    command -v "$cmd" >/dev/null 2>&1 && eval "$(register-python-argcomplete "$cmd")"
+  done
+fi
+EOS
   fi
+  ok "argcomplete set up"
 }
 
+# ==============================================================================
 # Main
-main() {
-  info "Dev Bootstrap starting (append-only; no EPEL required)"
+main(){
+  info "Dev Bootstrap starting"
   detect_os
+  run_if ENABLE_PACKAGES install_packages
 
-  install_packages_common
-  if [[ "$ENABLE_PACKAGES" -eq 1 ]]; then install_packages; else warn "Skipping packages."; fi
-
-  # If fonts/yamllint not in base repos, fall back to user-scope
+  # Fallbacks
   ensure_powerline_glyphs
-  if ! command -v yamllint >/dev/null 2>&1 && [[ "$ENABLE_YAMLLINT" -eq 1 ]]; then
-    ensure_yamllint_user
-  fi
-
+  [[ "$ENABLE_YAMLLINT" -eq 1 ]] && ! command -v yamllint >/dev/null && ensure_yamllint_user
   ensure_fzf_user
 
-  if [[ "$ENABLE_VIM_PLUGINS" -eq 1 ]]; then ensure_pathogen; deploy_plugins; else warn "Skipping Vim plugins."; fi
-  if [[ "$ENABLE_VIMRC" -eq 1 ]]; then install_vimrc_block; else warn "Skipping ~/.vimrc block."; fi
-  if [[ "$ENABLE_YAMLLINT" -eq 1 ]]; then install_yamllint_conf; else warn "Skipping yamllint config."; fi
+  # Editors & configs
+  run_if ENABLE_VIM_PLUGINS ensure_pathogen deploy_plugins
+  run_if ENABLE_VIMRC install_vimrc_block
+  run_if ENABLE_YAMLLINT install_yamllint_conf
 
-  if [[ "$ENABLE_BASHRC" -eq 1 ]]; then install_bashrc_block; else warn "Skipping ~/.bashrc history/prompt block."; fi
-  if [[ "$ENABLE_BLE" -eq 1 ]]; then install_ble; install_ble_bashrc_block; else warn "Skipping ble.sh."; fi
+  # Shell enhancements
+  run_if ENABLE_BASHRC install_bashrc_block
+  if [[ "$ENABLE_BLE" -eq 1 ]]; then install_ble; install_ble_bashrc_block; fi
+  [[ "$ENABLE_ARGCOMPLETE" -eq 1 ]] && install_argcomplete || info "Skipping argcomplete (disabled)"
 
-  if [[ "$ENABLE_ARGCOMPLETE" -eq 1 ]]; then
-    if declare -F install_argcomplete >/dev/null 2>&1; then
-      install_argcomplete
-    else
-      warn "install_argcomplete() missing; skipping argcomplete."
-    fi
-  fi
+  # Linters & CLIs
+  run_if ENABLE_BASH_LINTERS install_bash_linters
+  run_if ENABLE_PY_LINTERS install_python_linters
+  run_if ENABLE_KUBECTL_OC install_oc_kubectl
 
-  if [[ "$ENABLE_BASH_LINTERS" -eq 1 ]]; then install_bash_linters; else warn "Skipping bash linters."; fi
-  if [[ "$ENABLE_PY_LINTERS" -eq 1 ]]; then install_python_linters; else warn "Skipping python linters."; fi
+  # Terminals
+  run_if ENABLE_GHOSTTY install_ghostty
+  run_if ENABLE_TMUX install_tmux
 
-  if [[ "$ENABLE_KUBECTL_OC" -eq 1 ]]; then install_oc_kubectl; else warn "Skipping kubectl/oc install."; fi
-  if [[ "$ENABLE_REPO_TOOLING" -eq 1 ]]; then write_repo_tooling; else warn "Skipping repo tooling."; fi
+  run_if ENABLE_REPO_TOOLING write_repo_tooling
 
   ok "All done. Sourcing ~/.bashrc now (safe)."
   safe_source_bashrc
   ok "Done. For a fresh session, run: exec bash -l"
 }
-
 main
