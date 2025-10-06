@@ -9,6 +9,7 @@ set -euo pipefail
 # - kubectl + oc (+ completions)
 # - Ghostty (Fedora COPR) + Dracula theme (idempotent, cached failures)
 # - tmux + TPM + Dracula + menus/tabs
+# - pbcopy/pbpaste wrappers to ~/.local/bin (Wayland/X11/mac/WSL)
 # - Repo tooling (Makefile, .shellcheckrc)
 # ==============================================================================
 
@@ -24,10 +25,11 @@ ENABLE_BASH_LINTERS=1
 ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
-ENABLE_GHOSTTY=1
-ENABLE_GHOSTTY_DRACULA=1
+ENABLE_GHOSTTY=0
+ENABLE_GHOSTTY_DRACULA=0
 ENABLE_TMUX=1
 ENABLE_TMUX_DRACULA=1
+ENABLE_PBTOOLS=1            # <- install pbcopy/pbpaste wrappers
 
 CLEAN_OUTPUT=1
 LOG_FILE=""   # e.g. /tmp/bootstrap.log
@@ -128,10 +130,15 @@ detect_os(){
 }
 
 ensure_local_bin_path(){
+  mkdir -p "$HOME/.local/bin"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
     export PATH="$HOME/.local/bin:$PATH"
     [[ -f "$HOME/.bashrc" ]] || : >"$HOME/.bashrc"
     grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$HOME/.bashrc"
+    # persist also for login shells if ~/.profile exists
+    if [[ -f "$HOME/.profile" ]] && ! grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.profile" 2>/dev/null; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
+    fi
     info "Ensured ~/.local/bin on PATH"
   esac
 }
@@ -425,7 +432,7 @@ install_ghostty_debian(){
   elif [[ "${USE_UNOFFICIAL_GHOSTTY_UBUNTU:-0}" -eq 1 ]]; then
     warn "Using community installer for ghostty (Ubuntu/Debian)"
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mkasberg/ghostty-ubuntu/HEAD/install.sh)" || warn "ghostty unofficial install failed"
-    command -v ghostty >/devNull && ok "ghostty installed (community)" || err "ghostty community install failed"
+    command -v ghostty >/dev/null && ok "ghostty installed (community)" || err "ghostty community install failed"
   else
     warn "No official ghostty path for Debian/Ubuntu in this script."
   fi
@@ -617,6 +624,63 @@ install_tmux(){
 }
 
 # ==============================================================================
+# pbcopy / pbpaste wrappers (Wayland, X11, macOS, WSL; no PowerShell backend)
+install_pb_tools(){
+  ensure_local_bin_path
+
+  # pbcopy
+  cat > "$HOME/.local/bin/pbcopy" <<'PBC'
+#!/usr/bin/env bash
+set -euo pipefail
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+# Prefer Wayland, then X11, then native/mac, then WSL clip.exe
+if have wl-copy; then
+  exec wl-copy -f
+elif have xclip; then
+  exec xclip -selection clipboard
+elif have xsel; then
+  exec xsel --clipboard --input
+elif [[ "$(uname -s)" == "Darwin" ]] && have pbcopy; then
+  exec pbcopy
+elif have clip.exe; then
+  exec clip.exe
+else
+  echo "pbcopy: no clipboard backend found (need wl-copy/xclip/xsel/mac pbcopy/clip.exe)" >&2
+  exit 1
+fi
+PBC
+  chmod +x "$HOME/.local/bin/pbcopy"
+
+  # pbpaste
+  cat > "$HOME/.local/bin/pbpaste" <<'PBP'
+#!/usr/bin/env bash
+set -euo pipefail
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+if have wl-paste; then
+  exec wl-paste -n
+elif have xclip; then
+  exec xclip -selection clipboard -o
+elif have xsel; then
+  exec xsel --clipboard --output
+elif [[ "$(uname -s)" == "Darwin" ]] && have pbpaste; then
+  exec pbpaste
+elif have powershell.exe; then
+  # PowerShell backend intentionally disabled by configuration.
+  echo "pbpaste: PowerShell backend disabled." >&2
+  exit 1
+else
+  echo "pbpaste: no clipboard backend found (need wl-paste/xclip/xsel/mac pbpaste)" >&2
+  exit 1
+fi
+PBP
+  chmod +x "$HOME/.local/bin/pbpaste"
+
+  ok "Installed pbcopy/pbpaste to ~/.local/bin"
+}
+
+# ==============================================================================
 # Repo tooling
 write_repo_tooling(){
   local script_path="${BASH_SOURCE[0]:-$(pwd)/install_vimrc_etc.sh}" script_dir
@@ -692,6 +756,9 @@ main(){
   # Terminals
   run_if ENABLE_GHOSTTY install_ghostty
   run_if ENABLE_TMUX install_tmux
+
+  # Clipboard helpers
+  run_if ENABLE_PBTOOLS install_pb_tools
 
   run_if ENABLE_REPO_TOOLING write_repo_tooling
 

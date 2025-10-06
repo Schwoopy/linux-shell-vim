@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.4.3] - 2025-10-07
+
+### Added
+
+* **Cross-desktop clipboard tools: `pbcopy` / `pbpaste`**
+
+  * Installs lightweight, cross-environment clipboard wrappers to `~/.local/bin`:
+
+    * **Wayland:** uses `wl-copy` / `wl-paste` (preferred)
+    * **X11:** uses `xclip` or `xsel`
+    * **macOS:** uses native `pbcopy` / `pbpaste` if available
+    * **WSL:** `pbcopy` uses `clip.exe`; `pbpaste` **PowerShell backend disabled** by design
+  * Adds `~/.local/bin` to `PATH` (exported immediately and persisted in `~/.bashrc` + `~/.profile`)
+  * Includes clear logging and fallback hints if no backend is found.
+  * Standalone, idempotent installation — no interference with system clipboards.
+
+* **Documentation**
+
+  * Updated **README** with a full section on how to use `pbcopy` and `pbpaste`:
+
+    * Practical examples (`pbcopy < file`, `pbpaste | wc -l`, etc.)
+    * Backend detection explanation
+    * Notes for Wayland, X11, macOS, and WSL users
+
+### Changed
+
+* **Ghostty disabled by default**
+
+  * `ENABLE_GHOSTTY=0` and `ENABLE_GHOSTTY_DRACULA=0` by default
+  * Avoids install errors on headless or non-desktop systems (e.g., servers, WSL)
+  * Can be manually enabled in config for full desktop environments
+
+* **Installer cleanup**
+
+  * Integrates pbcopy/pbpaste setup directly into main bootstrap flow
+  * Ensures `PATH` export happens once, early in the process
+  * Maintains idempotent logic for re-runs (no redundant PATH lines)
+
+### Fixed
+
+* Ensured `pbcopy` / `pbpaste` scripts are executable and loadable in the same session after install.
+* Fixed `PATH` export guard to correctly detect pre-existing `~/.local/bin` entries.
+* Minor `set -u` guard improvements for local variable safety.
+
+---
+
 ## [0.4.2] - 2025-10-06
 
 ### Added
@@ -28,6 +74,7 @@ All notable changes to this project will be documented in this file.
 
   * Simplified logic — no re-download spam and cleaner “already installed” detection.
   * Uses a single unified path for Dracula theme setup and config validation.
+
 * **Logging**
 
   * Improved `[INFO]` / `[OK]` feedback for Ghostty normalization steps.
