@@ -2,10 +2,10 @@
 
 This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a development environment consistently across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
 
-It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, **tmux (with TPM + Dracula theme + menus/tabs)**, and linters — with **safe append-only config management** (no overwrites) and **clean logging** (no noisy progress bars).
+It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, **optional tmux (with TPM + Dracula theme + menus/tabs)**, and linters — with **safe append-only config management** (no overwrites) and **clean logging** (no noisy progress bars).
 It also ships **cross-desktop clipboard helpers**: `pbcopy` and `pbpaste`.
 
-> ℹ️ **Ghostty** is now **disabled by default** because it requires a running Linux window manager/desktop. You can enable it if you’re on a full desktop (see config).
+> ℹ️ **Ghostty** and **tmux** are now **disabled by default**. Ghostty requires a running Linux desktop/window manager; tmux is optional and can be enabled when you want it. See **Configuration** below.
 
 ---
 
@@ -49,30 +49,31 @@ It also ships **cross-desktop clipboard helpers**: `pbcopy` and `pbpaste`.
 * Appends a managed block to `~/.vimrc` (sane defaults, truecolor).
 * Plugin updates are idempotent and shallow.
 
-### 🔲 tmux Configuration (TPM + Dracula + Menus/Tabs)
+### 🔲 (Optional) tmux Configuration (TPM + Dracula + Menus/Tabs)
 
-* Installs **tmux** and **TPM** at `~/.tmux/plugins/tpm` (idempotent).
-* Appends a managed block to `~/.tmux.conf`:
+* **Disabled by default.** When enabled:
 
-  * Truecolor (`tmux-256color` + `RGB` overrides), mouse on, 100k history, Vi copy-mode.
-  * **Dracula** via TPM (`dracula/tmux`) with powerline-style status.
-  * **Menus/Tabs UX**:
+  * Installs **TPM** at `~/.tmux/plugins/tpm` (idempotent).
+  * Appends a managed block to `~/.tmux.conf`:
 
-    * **Mega-menu**: Prefix + `m` (splits, next/prev tab, rename, sync panes, reload, kill pane/tab).
-    * **Right-click menus**: on tabs (status bar) and inside panes.
-    * **Navigation**: Alt+←/→, Ctrl+PgUp/PgDn.
-* TPM plugins install/update non-interactively.
+    * Truecolor (`tmux-256color` + `RGB` overrides), mouse on, 100k history, Vi copy-mode.
+    * **Dracula** via TPM (`dracula/tmux`) with powerline-style status.
+    * **Menus/Tabs UX**:
 
-### 📋 Clipboard Helpers: `pbcopy` & `pbpaste` (new)
+      * **Mega-menu**: Prefix + `m` (splits, next/prev tab, rename, sync panes, reload, kill pane/tab).
+      * **Right-click menus**: on tabs (status bar) and inside panes.
+      * **Navigation**: Alt+←/→, Ctrl+PgUp/PgDn.
+  * TPM plugins install/update non-interactively.
+
+### 📋 Clipboard Helpers: `pbcopy` & `pbpaste`
 
 * Installs portable CLI wrappers to `~/.local/bin`:
 
   * **Wayland**: uses `wl-copy` / `wl-paste` (preferred).
   * **X11**: uses `xclip` (or `xsel` if `xclip` isn’t present).
-  * **macOS**: transparently calls the native `pbcopy`/`pbpaste` if detected.
-  * **WSL**: `pbcopy` uses `clip.exe`; `pbpaste` **PowerShell backend is intentionally disabled** (see usage/notes).
-
-> The installer **ensures `~/.local/bin` is on your `PATH`** now and persistently adds it to both `~/.bashrc` and `~/.profile` (if present), so `pbcopy`/`pbpaste` are immediately available.
+  * **macOS**: uses native tools if detected (no conflicts).
+  * **WSL**: `pbcopy` uses `clip.exe`; **`pbpaste` PowerShell backend is intentionally disabled** by design.
+* The installer **ensures `~/.local/bin` is on your `PATH`** by appending to `~/.bashrc`.
 
 ### 🧹 Linters
 
@@ -101,9 +102,9 @@ It also ships **cross-desktop clipboard helpers**: `pbcopy` and `pbpaste`.
 
 * **Fedora/RHEL-family**: optional COPR install (`alternateved/ghostty`)
 * **Debian/Ubuntu**: optional community or `.deb` path (off by default)
-* **Dracula theme**: installer handles nested `themes/dracula.conf` cases and selects `theme = dracula`
+* **Dracula theme**: installer handles nested `themes/dracula.conf` and selects `theme = dracula`
 
-> Disabled by default (`ENABLE_GHOSTTY=0`) because it requires a running Linux desktop/WM. Enable only if applicable.
+> Disabled by default (`ENABLE_GHOSTTY=0`) because it requires a running Linux desktop/WM.
 
 ---
 
@@ -147,66 +148,35 @@ chmod +x install_vimrc_etc.sh
 
 ## Using `pbcopy` and `pbpaste`
 
-The installer places both tools at: `~/.local/bin/pbcopy` and `~/.local/bin/pbpaste` and ensures that directory is exported to your `PATH` now and on future logins.
+The installer places both tools at: `~/.local/bin/pbcopy` and `~/.local/bin/pbpaste` and ensures that directory is exported to your `PATH` now and on future logins (via `~/.bashrc`).
 
 They map to your display stack:
 
 * **Wayland** → requires `wl-clipboard` (`wl-copy`, `wl-paste`)
 * **X11** → prefers `xclip` (falls back to `xsel`)
-* **macOS** → uses native `pbcopy`/`pbpaste` if detected (the script mainly targets Linux, but won’t get in your way)
-* **WSL** → `pbcopy` uses `clip.exe`; `pbpaste` **PowerShell backend is disabled** (see below)
+* **macOS** → uses native `pbcopy`/`pbpaste` if detected
+* **WSL** → `pbcopy` uses `clip.exe`; **`pbpaste` backend is disabled** (install an X/Wayland clipboard tool if you need paste)
 
-#### Examples
-
-Copy the output of a command:
+**Examples**
 
 ```bash
 kubectl get pods | pbcopy
-```
-
-Paste into a file:
-
-```bash
 pbpaste > pods.txt
-```
-
-Copy a file’s contents:
-
-```bash
 pbcopy < ~/.ssh/id_rsa.pub
-```
-
-Paste into your shell as input to another command:
-
-```bash
 pbpaste | wc -l
-```
-
-Use with here-strings:
-
-```bash
 pbcopy <<< "Hello from Dev Bootstrap!"
 ```
 
-#### Notes & Tips
-
-* If you see `no clipboard backend found`, install one:
-
-  * Wayland: `wl-clipboard`
-  * X11: `xclip` (or `xsel`)
-* **WSL**:
-
-  * `pbcopy` works via `clip.exe`.
-  * `pbpaste` PowerShell backend is intentionally **disabled** (by request). If you need paste support in WSL, install an X/Wayland clipboard tool (e.g., `xclip`, `xsel`, or `wl-clipboard`) and use a compatible terminal/X server setup.
+If you see `no clipboard backend found`, install one: `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11).
 
 ---
 
 ## After Completion
 
-* Appends/updates blocks in `~/.bashrc`, `~/.vimrc`, and `~/.tmux.conf`
+* Appends/updates blocks in `~/.bashrc`, `~/.vimrc`, and `~/.tmux.conf` (if tmux enabled)
 * Creates default `~/.config/yamllint/config` if missing
-* Installs/updates tools, fonts, and plugins (including TPM/tmux plugins)
-* **Adds `~/.local/bin` to your PATH** (persisted in `~/.bashrc` and `~/.profile`)
+* Installs/updates tools, fonts, and plugins (including TPM/tmux plugins if enabled)
+* **Adds `~/.local/bin` to your PATH** (persisted in `~/.bashrc`)
 * Sources `~/.bashrc` in the current shell
 * Suggests running `exec bash -l` for a fully fresh session
 
@@ -214,7 +184,7 @@ pbcopy <<< "Hello from Dev Bootstrap!"
 
 ## Configuration
 
-Edit the top of `install_vimrc_etc.sh`:
+At the top of `install_vimrc_etc.sh`, toggle features:
 
 ```bash
 ENABLE_PACKAGES=1
@@ -229,16 +199,16 @@ ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
 
-# Terminals
-ENABLE_GHOSTTY=0           # default OFF (needs a desktop/WM)
+# Terminals (both OFF by default)
+ENABLE_GHOSTTY=0
 ENABLE_GHOSTTY_DRACULA=0
 
-# tmux
-ENABLE_TMUX=1
+# tmux (OFF by default)
+ENABLE_TMUX=0
 ENABLE_TMUX_DRACULA=1
 
 # Clipboard helpers
-ENABLE_PBTOOLS=1           # default ON
+ENABLE_PBCOPY_PBPASTE=1
 ```
 
 Pin Python linter versions:
@@ -277,11 +247,11 @@ PYLINT_VERSION="3.2.6"
   * Wayland: `wl-copy`/`wl-paste` (package: `wl-clipboard`)
   * X11: `xclip` (or `xsel`)
   * macOS: native tools are used if present
-  * WSL: `clip.exe` for `pbcopy`; `pbpaste` backend intentionally disabled
+  * WSL: `clip.exe` for `pbcopy`; `pbpaste` backend is intentionally disabled
 
 ---
 
-## Example Run
+## Example Run (with tmux disabled)
 
 ```text
 [INFO] Dev Bootstrap starting (append-only; no EPEL required)
@@ -298,9 +268,7 @@ PYLINT_VERSION="3.2.6"
 [ OK ] ruff installed (0.6.5)
 [ OK ] pylint installed (3.2.6)
 [ OK ] kubectl/oc completions saved
-[ OK ] TPM ready
-[ OK ] tmux plugins installed/updated
-[ OK ] tmux configured. Start with: tmux
+[INFO] Skipping install_tmux (disabled)
 [ OK ] Installed pbcopy/pbpaste to ~/.local/bin
 [ OK ] All done. Sourcing ~/.bashrc now (safe).
 [ OK ] Done. For a fresh session, run: exec bash -l
@@ -315,8 +283,7 @@ PYLINT_VERSION="3.2.6"
 * **Powerline glyphs not rendering** → select a Nerd Font (e.g., *FiraCode Nerd Font*) in your terminal.
 * **Duplicate blocks in dotfiles** → re-runs replace prior managed blocks and trim extra blanks.
 * **`shellcheck`/`shfmt` missing** → not in base repos; install from upstream if desired.
-* **Ghostty on Debian/Ubuntu** → no official path in script; optional community installer available.
-* **Ghostty theme not detected** → script handles nested `themes/dracula.conf`. Ensure `theme = dracula` is present in `~/.config/ghostty/config`.
+* **Ghostty** → optional; enable only on a desktop/WM. Theme selector handles nested `themes/dracula.conf`.
 * **`pbcopy`/`pbpaste` say “no backend found”** → install `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11). On WSL, `pbcopy` uses `clip.exe`; `pbpaste` backend is disabled by design.
 
 ---
