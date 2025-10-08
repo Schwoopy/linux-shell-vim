@@ -4,135 +4,117 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [0.4.4] - 2025-10-08
+## [0.4.5] – 2025-10-09
 
 ### Added
 
-* **Safer sudo handling**
-  * The installer **no longer requires running as sudo/root**.
-  * It now **prompts for sudo only when necessary**, such as installing system packages or writing to `/usr/local/bin`.
-  * Ensures user-owned configurations, plugins, and local binaries under `$HOME`.
+* **Automatic whitespace & duplicate cleanup**
 
-* **Ownership and permissions verification**
-  * All files and directories created under the user’s home directory are automatically owned by the **current user**.
-  * Any use of `chown` now explicitly uses **absolute paths** to avoid ambiguity or permission leaks.
-  * Introduced `ensure_user_ownership()` and `mkuserdir()` consistency checks across all modules.
+  * Added a **post-update compaction pass** for all managed dotfiles (`.bashrc`, `.vimrc`, `.tmux.conf`).
+  * Introduced:
 
-* **Improved clipboard integration (`pbcopy` / `pbpaste`)**
-  * Ensures `~/.local/bin/pbcopy` and `pbpaste` are both **user-owned and executable**.
-  * Automatically exports `~/.local/bin` to `PATH` if missing.
-  * Integration happens early in the script to guarantee immediate availability.
+    * `compact_file()` — removes redundant blank lines and trailing whitespace.
+    * `dedupe_literal_line()` — ensures single instances of exact literal lines such as
+      `export PATH="$HOME/.local/bin:$PATH"`.
+  * Compaction runs automatically on every re-run, keeping files neat and idempotent.
+
+* **Healing re-run logic**
+
+  * The installer can now **repair previous installs** instead of overwriting:
+
+    * Removes duplicate managed blocks.
+    * Trims excess blank lines.
+    * Re-inserts missing managed sections cleanly.
+
+* **Safer user-scoped behavior**
+
+  * All file creation and directory modifications now occur strictly under the **current user**.
+  * Introduced **full-path `chown` enforcement** — only absolute paths are used during ownership fixes.
+  * Ownership check integrated in `ensure_user_ownership()` after every run.
+
+* **Improved backup and restore consistency**
+
+  * Every modification still generates a timestamped `.bak.YYYYMMDD_HHMMSS` backup.
+  * Compaction and deduplication never run on the backup copies.
 
 ### Changed
 
-* **Default configuration updates**
-  * **tmux** is now **disabled by default** (`ENABLE_TMUX=0`), matching Ghostty behavior.
-  * **Ghostty** remains disabled (`ENABLE_GHOSTTY=0`), as it requires a GUI window manager.
-  * Clipboard helpers (`pbcopy`, `pbpaste`) remain **enabled by default** (`ENABLE_PBCOPY_PBPASTE=1`).
+* **Sudo handling refinement**
 
-* **PATH export logic**
-  * Simplified and idempotent — appends to `~/.bashrc` only once.
-  * Added safety guards to prevent duplicate PATH lines across re-runs.
+  * Root execution is **no longer required**; script runs as normal user.
+  * Prompts for `sudo` only when installing system packages or writing to `/usr/local/bin`.
+  * All `$HOME` content remains user-owned.
 
-* **File safety**
-  * Every write operation now includes a backup (`.bak.YYYYMMDD_HHMMSS`) before modification.
-  * Ensures re-runs preserve user changes outside managed blocks.
+* **Logging polish**
 
-* **Logging and clarity**
-  * Improved `[INFO]` and `[OK]` messages for ownership repairs, sudo prompts, and clipboard installation.
-  * Cleaner startup banner and section grouping for better traceability in logs.
+  * Cleaner `[INFO]` and `[OK]` messages for deduplication, compaction, and ownership repairs.
+  * Compact log output — reduced redundant `[INFO]` spam.
+  * Consistent colored status output across all modules.
+
+* **Block management simplification**
+
+  * Replaced old `awk` patterns (with warning-prone escapes) with literal-safe replacements.
+  * Reduced unnecessary comment banners in generated files.
+  * Each block now includes a short descriptive header instead of long separators.
+
+* **Default behavior unchanged**
+
+  * `ENABLE_TMUX=0` (off by default).
+  * `ENABLE_GHOSTTY=0` (off by default).
+  * Clipboard helpers remain **enabled** (`ENABLE_PBTOOLS=1`).
 
 ### Fixed
 
-* Fixed incorrect ownership when running as non-root but installing with sudo.
-* Corrected rare `unbound variable` errors in ownership and directory creation functions.
-* Prevented accidental overwriting of files with relative `chown` calls — all now resolved via `_abs_path()`.
-* Ensured tmux and Ghostty optional blocks respect user flags and don’t run when disabled.
+* Eliminated `awk` escape-sequence warnings during `.bashrc` updates.
+* Fixed duplicate PATH and export lines from prior versions.
+* Ensured compactors don’t remove managed block delimiters.
+* Corrected subtle cases where empty files weren’t re-created before upsert.
+* Fixed `sudo` ownership mismatch on files created pre-0.4.4.
+* Verified `.vimrc` and `.tmux.conf` now reformat safely on repeated runs.
 
 ---
 
-## [0.4.3] - 2025-10-07
+## [0.4.4] – 2025-10-08
 
 ### Added
 
-* **Cross-desktop clipboard tools: `pbcopy` / `pbpaste`**
-  * Installs lightweight wrappers to `~/.local/bin`:
-    * **Wayland:** `wl-copy` / `wl-paste` (preferred)
-    * **X11:** `xclip` (falls back to `xsel`)
-    * **macOS:** native `pbcopy` / `pbpaste` if available
-    * **WSL:** `pbcopy` uses `clip.exe`; `pbpaste` **PowerShell backend disabled** by design
-  * Ensures `~/.local/bin` is on `PATH` **immediately and persistently**.
-  * Clear logging and hints if no clipboard backend is found.
-  * Standalone, idempotent install — doesn’t interfere with system clipboards.
-
-* **Documentation**
-  * README updated with a full `pbcopy`/`pbpaste` section:
-    * Practical examples (`pbcopy < file`, `pbpaste | wc -l`, pipelines, here-strings, etc.)
-    * Backend detection overview and notes for Wayland, X11, macOS, WSL.
+* **Safer sudo handling** — prompts only when needed.
+* **Ownership and permissions verification** via `ensure_user_ownership()`.
+* **Improved clipboard integration** (`pbcopy` / `pbpaste`): user-owned, PATH exported automatically.
 
 ### Changed
 
-* **Defaults**
-  * **Ghostty** default **OFF**: `ENABLE_GHOSTTY=0`, `ENABLE_GHOSTTY_DRACULA=0`.
-  * **Installer flow:** integrates pbcopy/pbpaste setup earlier, ensuring availability after run.
-  * Maintains idempotent `PATH` export; prevents redundant additions.
+* **Default configuration**: `tmux` and `Ghostty` off; clipboard helpers on.
+* **PATH export logic**: simplified and idempotent.
+* **File safety**: backups on every write.
+* **Logging**: clearer sectioned output.
 
 ### Fixed
 
-* `pbcopy` / `pbpaste` executables now loadable in same session.
-* Fixed duplicate PATH exports.
-* Safer variable handling under `set -u`.
+* Ownership and `unbound variable` issues corrected.
+* Relative `chown` paths replaced with absolute.
+* Optional modules respect disable flags.
 
 ---
 
-## [0.4.2] - 2025-10-06
+## [0.4.3] – 2025-10-07
 
-### Added
-
-* **Ghostty config normalization**
-  * Automatically renames:
-    * `~/.config/ghostty/config.conf` → `config`
-    * `~/.config/ghostty/config.toml` → `config`
-  * Prevents Ghostty “config not found” errors.
-  * Ensures `theme = dracula` is appended only once.
-
-* **Ghostty theme safety**
-  * Ensures `~/.config/ghostty` exists before writing config.
-  * Skips unnecessary downloads if theme is cached or installed.
-
-### Changed
-
-* Simplified Dracula installer flow; cleaner “already installed” detection.
-* Unified path and cache logic for Ghostty theme setup.
-
-### Fixed
-
-* **Ghostty config sync** — fixed theme detection and reinstallation loops.
-* **`set -u` compatibility** — initialized all local variables.
-* **Temp cleanup** — removes all intermediate zip/stamp files.
+* Introduced cross-desktop **`pbcopy` / `pbpaste`** wrappers.
+* Documentation expanded with usage and backend detection.
+* Prevented duplicate PATH lines; improved session availability.
 
 ---
 
-## [0.4.1] - 2025-10-05
+## [0.4.2] – 2025-10-06
 
-### Added
+* Ghostty config normalization (`config.conf` → `config`).
+* Dracula theme safety and caching improvements.
+* Fixed Ghostty reinstall loops and temp cleanup.
 
-* **tmux menus & tabs UX**
-  * **Mega-menu** on **Prefix + `m`**: splits, next/prev tab, rename, sync panes, reload config, kill pane/tab.
-  * **Right-click menus**: on tabs (status bar) and inside panes.
-  * **Navigation**: **Alt+←/→**, **Ctrl+PgUp/PgDn**.
-  * **Status bar at top**, 100k scrollback, Vi copy-mode.
+---
 
-* **Ghostty Dracula caching**
-  * Caches “not found” state for 7 days to prevent repeated downloads; override via `GHOSTTY_DRACULA_FORCE=1`.
+## [0.4.1] – 2025-10-05
 
-### Changed
-
-* Consolidated upsert logic into `upsert_greedy`.
-* Quieter plugin update flow for ble.sh and TPM.
-
-### Fixed
-
-* Fixed `sysbindir` and `cfgdir` unbound variable issues.
-* Cleaned up Ghostty theme re-download logic.
-* Resolved tmux `display-message` argument quoting errors.
+* Added **tmux menus/tabs UX** (Prefix + `m`, right-click menus, navigation keys).
+* Added **Ghostty Dracula caching** with 7-day skip window.
+* Fixed quoting and variable issues in tmux and Ghostty routines.
