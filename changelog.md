@@ -29,48 +29,46 @@ All notable changes to this project will be documented in this file.
 * **Safer user-scoped behavior**
 
   * All file creation and directory modifications now occur strictly under the **current user**.
-  * Introduced **full-path `chown` enforcement** — only absolute paths are used during ownership fixes.
-  * Ownership check integrated in `ensure_user_ownership()` after every run.
+  * **Full-path `chown` enforcement** — only absolute paths are used during ownership fixes.
+  * Ownership checks integrated via `ensure_user_ownership()` after writes.
 
 * **Improved backup and restore consistency**
 
   * Every modification still generates a timestamped `.bak.YYYYMMDD_HHMMSS` backup.
-  * Compaction and deduplication never run on the backup copies.
+  * Compaction and deduplication **never** run on backup copies.
 
 ### Changed
 
 * **Sudo handling refinement**
 
-  * Root execution is **no longer required**; script runs as normal user.
-  * Prompts for `sudo` only when installing system packages or writing to `/usr/local/bin`.
+  * Root execution is **not required**; run as a normal user.
+  * Prompts for `sudo` **only when necessary** (e.g., installing packages, writing to `/usr/local/bin`).
   * All `$HOME` content remains user-owned.
 
 * **Logging polish**
 
-  * Cleaner `[INFO]` and `[OK]` messages for deduplication, compaction, and ownership repairs.
-  * Compact log output — reduced redundant `[INFO]` spam.
-  * Consistent colored status output across all modules.
+  * Cleaner `[INFO]` and `[OK]` messages for deduplication, compaction, ownership repairs, and sudo prompts.
+  * Reduced redundant log lines while keeping important details.
 
 * **Block management simplification**
 
-  * Replaced old `awk` patterns (with warning-prone escapes) with literal-safe replacements.
-  * Reduced unnecessary comment banners in generated files.
-  * Each block now includes a short descriptive header instead of long separators.
+  * Replaced warning-prone `awk` patterns with literal-safe logic.
+  * Reduced banner comments; each managed block now has a short, descriptive header.
 
-* **Default behavior unchanged**
+* **Defaults unchanged**
 
   * `ENABLE_TMUX=0` (off by default).
   * `ENABLE_GHOSTTY=0` (off by default).
-  * Clipboard helpers remain **enabled** (`ENABLE_PBTOOLS=1`).
+  * Clipboard helpers remain **on** (`ENABLE_PBTOOLS=1`).
 
 ### Fixed
 
-* Eliminated `awk` escape-sequence warnings during `.bashrc` updates.
-* Fixed duplicate PATH and export lines from prior versions.
-* Ensured compactors don’t remove managed block delimiters.
-* Corrected subtle cases where empty files weren’t re-created before upsert.
-* Fixed `sudo` ownership mismatch on files created pre-0.4.4.
-* Verified `.vimrc` and `.tmux.conf` now reformat safely on repeated runs.
+* Eliminated `awk` escape warnings during `.bashrc` updates.
+* Prevented duplicate `PATH`/export lines from earlier versions.
+* Compactors avoid touching block delimiters.
+* Ensured empty files are (re)created safely before upserts.
+* Corrected legacy ownership created before 0.4.4.
+* Verified `.vimrc` and `.tmux.conf` compact and reformat safely on repeat runs.
 
 ---
 
@@ -79,15 +77,15 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 * **Safer sudo handling** — prompts only when needed.
-* **Ownership and permissions verification** via `ensure_user_ownership()`.
-* **Improved clipboard integration** (`pbcopy` / `pbpaste`): user-owned, PATH exported automatically.
+* **Ownership & permissions verification** via `ensure_user_ownership()`.
+* **Improved clipboard integration** (`pbcopy`/`pbpaste`): user-owned, PATH exported automatically.
 
 ### Changed
 
-* **Default configuration**: `tmux` and `Ghostty` off; clipboard helpers on.
+* **Defaults**: tmux & Ghostty off; clipboard helpers on.
 * **PATH export logic**: simplified and idempotent.
 * **File safety**: backups on every write.
-* **Logging**: clearer sectioned output.
+* **Logging**: clearer, sectioned output.
 
 ### Fixed
 

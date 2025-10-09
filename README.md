@@ -79,7 +79,6 @@ It also ships **cross-desktop clipboard helpers**: `pbcopy` and `pbpaste`.
 
 * **Eternal history** (`~/.bash_eternal_history`) with timestamps
 * **Prompt** shows git branch (`__git_ps1` when available; fallback included)
-* **ble.sh** (interactive only): autosuggestions, syntax highlighting
 * **bash-completion**: system + user-scope
 * **fzf**: system or user fallback (`~/.fzf`) with keybindings & completion
 * **argcomplete**: user-scope activation
@@ -189,7 +188,6 @@ ENABLE_VIM_PLUGINS=1
 ENABLE_VIMRC=1
 ENABLE_YAMLLINT=1
 ENABLE_BASHRC=1
-ENABLE_BLE=1
 ENABLE_ARGCOMPLETE=1
 ENABLE_BASH_LINTERS=1
 ENABLE_PY_LINTERS=1
@@ -229,7 +227,7 @@ USE_UNOFFICIAL_GHOSTTY_UBUNTU=0  # set 1 to use community installer
 * Bash 4+
 * `sudo` privileges (for system packages)
 * `git`, `curl`, `make`, `gawk` (auto-installed when possible)
-* Internet access (plugins, ble.sh, fonts, pip packages, TPM/tmux plugins)
+* Internet access (plugins, fonts, pip packages, TPM/tmux plugins)
 * For `pbcopy`/`pbpaste`: `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11)
 
 ---
@@ -242,10 +240,3 @@ USE_UNOFFICIAL_GHOSTTY_UBUNTU=0  # set 1 to use community installer
 * **Duplicate blocks / too many blank lines** → re-run the installer; it compacts and dedupes.
 * **Ghostty** → enable only on a desktop/WM; theme selector handles nested `themes/dracula.conf`.
 * **`pbcopy`/`pbpaste` “no backend”** → install `wl-clipboard` or `xclip`/`xsel`. On WSL, paste backend is disabled by design.
-
----
-
-## ToDo
-
-* Add Terraform & Helm CLIs
-* Optional `pipx` isolation for Python linters
