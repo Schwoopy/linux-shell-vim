@@ -1,127 +1,150 @@
 # Dev Bootstrap Installer
 
-This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a development environment consistently across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
+This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a modern developer environment across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
 
-It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, **optional tmux (with TPM + Dracula theme + menus/tabs)**, and linters — with **safe append-only config management** (no overwrites), **“healing” re-runs** (it compacts whitespace and removes duplicate lines), and **clean logging**.
-It also ships **cross-desktop clipboard helpers**: `pbcopy` and `pbpaste`.
+It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, and Python/Bash linters — with **safe append-only config management**, **healing re-runs**, and **clean, compact logging**.
 
-> ℹ️ **Ghostty** and **tmux** are **disabled by default**. Ghostty requires a running Linux desktop/window manager; tmux is optional. Enable them in **Configuration** below.
+It also installs **cross-desktop clipboard helpers** (`pbcopy` and `pbpaste`) for Linux, WSL, and macOS-style interoperability.
 
 ---
 
-## Platform Support & Test Status
+## Platform Support and Test Status
 
-* ✅ **Tested**
+- Tested:
+  - Fedora 42
+- Pending testing:
+  - RHEL 9.x
+- Currently untested:
+  - Rocky Linux 9.x  
+  - AlmaLinux 9.x  
+  - Ubuntu 22.04 / 24.04  
+  - Debian 12 (Bookworm)  
+  - Fedora 41 / 40  
+  - Linux Mint 21.x  
+  - WSL (Ubuntu/Debian)
 
-  * **Fedora 42**
-* 🟡 **Pending testing**
+If something breaks on your distribution, please open an issue with logs.
 
-  * **RHEL**: 9.x
-* ⚠️ **Currently untested**
+---
 
-  * **Rocky Linux**: 9.x
-  * **AlmaLinux**: 9.x
-  * **Ubuntu**: 22.04 LTS, 24.04 LTS
-  * **Debian**: 12 (Bookworm)
-  * **Fedora**: 41, 40
-  * **Linux Mint**: 21.x
-  * **WSL (Ubuntu/Debian)**
+## What's New in v0.4.6
 
-> If something breaks on your distro/version, please open an issue with logs.
+- Refactored for **Google Shell Style**  
+  Consistent quoting, helper functions, constants, `set -euo pipefail`, and early exits.
+- **BLE and tmux removed**  
+  Simplified shell setup without `ble.sh` or tmux dependencies.  
+  Compatible with PuTTY, Fedora Terminal, and SSH sessions.
+- **Ghostty optional**  
+  Optional terminal installer for Fedora/RHEL (`copr:alternateved/ghostty`) with Dracula theme.  
+  Disabled by default (`ENABLE_GHOSTTY=0`).
+- **Clipboard helpers enabled**  
+  Adds `pbcopy` and `pbpaste` under `~/.local/bin`, ensures `PATH` includes that directory.
+- **Healing re-runs**  
+  Compact and deduplicate configuration files on every run (`.bashrc`, `.vimrc`).
+- **Safer user-scope installs**  
+  All modifications and backups occur under the current user account only.
 
 ---
 
 ## Features
 
-### 🖥️ Packages (base repos only)
+### Package Installation (Base Repositories Only)
 
-* **Debian/Ubuntu**: `vim`, `git`, `fonts-powerline`, `fzf`, `yamllint`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`, `tmux`
-* **RHEL/Rocky/Fedora**: `vim-enhanced`, `git`, `powerline-fonts`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`, `tmux`
+| OS Family | Installed Packages |
+|------------|--------------------|
+| Debian/Ubuntu | `vim`, `git`, `fonts-powerline`, `fzf`, `yamllint`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip` |
+| RHEL/Rocky/Fedora | `vim-enhanced`, `git`, `powerline-fonts`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip` |
 
-> If `yamllint` or Powerline/Nerd fonts aren’t available, see **Fallback Behavior**.
-
-### ✨ Vim
-
-* Installs **Pathogen** and curated plugins:
-  `vim-airline`, `nerdtree`, `fzf-vim`, `vim-fugitive`, `ale`, `indentLine`, `vim-gitgutter`, `vim-floaterm`, `jinja-4-vim`, `shades-of-purple`
-* Appends one managed block to `~/.vimrc` (sane defaults, truecolor).
-* Re-runs update plugins idempotently.
-
-### 🔲 (Optional) tmux (TPM + Dracula + Menus/Tabs)
-
-* **Disabled by default.** When enabled:
-
-  * Installs **TPM** at `~/.tmux/plugins/tpm`.
-  * Appends a managed block to `~/.tmux.conf`:
-
-    * Truecolor (`tmux-256color` + RGB overrides), mouse on, 100k history, Vi copy-mode.
-    * **Dracula** via `dracula/tmux`, powerline-style status.
-    * **UX**: Mega-menu (Prefix+`m`), right-click menus, Alt+←/→, Ctrl+PgUp/PgDn.
-  * TPM plugins install/update non-interactively.
-
-### 📋 Clipboard Helpers: `pbcopy` & `pbpaste`
-
-* Installs portable shims to `~/.local/bin`:
-
-  * **Wayland** → `wl-copy` / `wl-paste`
-  * **X11** → `xclip` (or `xsel`)
-  * **macOS** → native tools if detected
-  * **WSL** → `pbcopy` uses `clip.exe`; **`pbpaste` PowerShell backend intentionally disabled**
-* The installer **ensures `~/.local/bin` is on your `PATH`** (appended to `~/.bashrc` only once).
-
-### 🧹 Linters
-
-* **YAML**: `yamllint` (repo or pip user fallback) + default config at `~/.config/yamllint/config`
-* **Bash**: `shellcheck`, `shfmt`
-* **Python**: `ruff`, `pylint` via pip (user-scope; versions configurable)
-
-### 🕰️ Bash Customizations
-
-* **Eternal history** (`~/.bash_eternal_history`) with timestamps
-* **Prompt** shows git branch (`__git_ps1` when available; fallback included)
-* **bash-completion**: system + user-scope
-* **fzf**: system or user fallback (`~/.fzf`) with keybindings & completion
-* **argcomplete**: user-scope activation
-* **carapace** (optional): rich completions if present
-
-### ☸️ Kubernetes & OpenShift
-
-* Installs **`kubectl`** and **`oc`** to `/usr/local/bin` if writable, else to `~/.local/bin`
-* Generates bash completions into `~/.bash_completion.d/`
-
-### 🧪 Terminal: Ghostty (+ Dracula) — **default OFF**
-
-* **Fedora/RHEL**: optional COPR install (`alternateved/ghostty`)
-* **Debian/Ubuntu**: optional `.deb` or community installer path
-* **Theme**: handles nested `themes/dracula.conf` and sets `theme = dracula`
-
-> Off by default (`ENABLE_GHOSTTY=0`) since it needs a desktop/WM.
-
-### 🔁 Idempotent “Healing”
-
-* Safe upserts with backups (timestamped).
-* **Compacts whitespace and removes duplicate literal lines** (e.g., repeated `export PATH="$HOME/.local/bin:$PATH"`).
-* Keeps ownership under your current user; uses `sudo` **only** for system operations.
+If `yamllint` or Powerline fonts are missing, see the fallback section below.
 
 ---
 
-## Fallback Behavior (No Extra Repos)
+### Vim Configuration
 
-* **yamllint** → user-scope:
+- Installs **Pathogen** and curated plugins:
+  `vim-airline`, `nerdtree`, `fzf-vim`, `vim-fugitive`, `ale`, `indentLine`, `vim-gitgutter`, `vim-floaterm`, `jinja-4-vim`, `shades-of-purple`
+- Adds one managed block to `~/.vimrc` (sensible defaults, 24-bit color).
+- Re-runs update plugins safely without duplicates.
+
+---
+
+### Linters
+
+- YAML → `yamllint` (system or pip fallback)
+- Bash → `shellcheck`, `shfmt`
+- Python → `ruff`, `pylint` (user-scope pip install)
+
+---
+
+### Bash Configuration
+
+- Eternal history (`~/.bash_eternal_history`) with timestamps
+- Prompt shows current git branch if available
+- System and user bash completion
+- `fzf` with keybindings and completion
+- `argcomplete` enabled for Python CLIs
+- `carapace` integrated if present
+
+---
+
+### Kubernetes and OpenShift
+
+- Installs `kubectl` and `oc`
+  - To `/usr/local/bin` if writable, otherwise `~/.local/bin`
+  - Creates bash completions in `~/.bash_completion.d/`
+- Automatically detects CPU architecture (amd64, arm64, etc.)
+
+---
+
+### Optional Terminal: Ghostty
+
+- Fedora/RHEL: Installed from `copr:alternateved/ghostty`
+- Dracula theme applied automatically when enabled
+- Disabled by default (`ENABLE_GHOSTTY=0`)
+- Safe to enable only in desktop environments with a window manager
+
+---
+
+### Clipboard Helpers
+
+Installs portable `pbcopy` and `pbpaste` wrappers into `~/.local/bin` and ensures `PATH` includes that directory.
+
+Backends:
+- Wayland → `wl-clipboard`
+- X11 → `xclip` or `xsel`
+- WSL → `clip.exe` (paste disabled)
+- macOS → native tools
+
+Example:
+```bash
+echo "hello world" | pbcopy
+pbpaste > output.txt
+````
+
+If no backend is detected, install `wl-clipboard` or `xclip`.
+
+---
+
+## Fallback Behavior
+
+If packages are not available in system repositories:
+
+* `yamllint` is installed via:
 
   ```bash
   python3 -m pip install --user yamllint
   ```
-
-  Ensures `~/.local/bin` is on `PATH`.
-
-* **Powerline glyphs** → installs **FiraCode Nerd Font** to:
+* FiraCode Nerd Font installed to:
 
   ```
   ~/.local/share/fonts
   ```
 
-  and refreshes cache (`fc-cache -f`).
+  and font cache refreshed with:
+
+  ```
+  fc-cache -f
+  ```
 
 ---
 
@@ -139,48 +162,14 @@ Run:
 ./install_vimrc_etc.sh
 ```
 
-The script will prompt for `sudo` **only** when needed (packages, system dirs).
-
----
-
-## Using `pbcopy` and `pbpaste`
-
-Installed at `~/.local/bin/pbcopy` and `~/.local/bin/pbpaste` (PATH ensured).
-
-Backends:
-
-* **Wayland** → `wl-clipboard` (`wl-copy`, `wl-paste`)
-* **X11** → `xclip` (or `xsel`)
-* **macOS** → native tools
-* **WSL** → `pbcopy` via `clip.exe`; `pbpaste` backend disabled (install X/Wayland clipboard tool if needed)
-
-Examples:
-
-```bash
-kubectl get pods | pbcopy
-pbpaste > pods.txt
-pbcopy < ~/.ssh/id_rsa.pub
-pbpaste | wc -l
-pbcopy <<< "Hello from Dev Bootstrap!"
-```
-
-If you see `no clipboard backend found`, install `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11).
-
----
-
-## After Completion
-
-* Appends/updates blocks in `~/.bashrc`, `~/.vimrc`, and (if enabled) `~/.tmux.conf`
-* Creates `~/.config/yamllint/config` if missing
-* Installs/updates tools, fonts, and plugins (incl. TPM/tmux plugins when enabled)
-* Adds `~/.local/bin` to your `PATH` (persisted in `~/.bashrc`)
-* Sources `~/.bashrc` and suggests `exec bash -l` for a fresh login shell
+The script is idempotent and safe to re-run.
+Each run compacts configuration files and removes duplicates automatically.
 
 ---
 
 ## Configuration
 
-At the top of the script:
+Adjust at the top of the script:
 
 ```bash
 ENABLE_PACKAGES=1
@@ -194,15 +183,8 @@ ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
 
-# Terminals (OFF by default)
+# Optional features
 ENABLE_GHOSTTY=0
-ENABLE_GHOSTTY_DRACULA=0
-
-# tmux (OFF by default)
-ENABLE_TMUX=0
-ENABLE_TMUX_DRACULA=1
-
-# Clipboard helpers
 ENABLE_PBTOOLS=1
 ```
 
@@ -213,30 +195,54 @@ RUFF_VERSION="0.6.5"
 PYLINT_VERSION="3.2.6"
 ```
 
-Optional Ghostty on Debian/Ubuntu:
-
-```bash
-GHOSTTY_DEB_URL=""               # .deb URL to enable install
-USE_UNOFFICIAL_GHOSTTY_UBUNTU=0  # set 1 to use community installer
-```
-
 ---
 
 ## Requirements
 
-* Bash 4+
-* `sudo` privileges (for system packages)
-* `git`, `curl`, `make`, `gawk` (auto-installed when possible)
-* Internet access (plugins, fonts, pip packages, TPM/tmux plugins)
-* For `pbcopy`/`pbpaste`: `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11)
+* Bash 4 or newer
+* `sudo` privileges for package installation
+* Internet access for plugin and font downloads
+* `git`, `curl`, `make`, `gawk` (installed if missing)
+* For clipboard support:
+
+  * Wayland → `wl-clipboard`
+  * X11 → `xclip` or `xsel`
 
 ---
 
 ## Troubleshooting
 
-* **`pip3` not found** → uses `ensurepip`, falls back to distro `python3-pip`.
-* **`yamllint` missing in repos** → user-scope via pip; PATH is ensured.
-* **Powerline glyphs not rendering** → choose a Nerd Font (e.g., FiraCode Nerd Font) in your terminal.
-* **Duplicate blocks / too many blank lines** → re-run the installer; it compacts and dedupes.
-* **Ghostty** → enable only on a desktop/WM; theme selector handles nested `themes/dracula.conf`.
-* **`pbcopy`/`pbpaste` “no backend”** → install `wl-clipboard` or `xclip`/`xsel`. On WSL, paste backend is disabled by design.
+| Issue                              | Solution                                             |
+| ---------------------------------- | ---------------------------------------------------- |
+| `pip3` not found                   | Script installs `python3-pip` or uses `ensurepip`.   |
+| Fonts not rendering                | Select “FiraCode Nerd Font” in terminal preferences. |
+| Duplicate PATH lines               | Re-run script; deduplication removes extra lines.    |
+| Missing `pbcopy`/`pbpaste` backend | Install `wl-clipboard` or `xclip`.                   |
+| Ghostty not launching              | Enable only on desktop systems.                      |
+
+---
+
+## Example Run
+
+```text
+[INFO] Dev Bootstrap starting (append-only; no EPEL required)
+[INFO] OS family: redhat (ID=fedora)
+[ OK ] Packages installed (base repos only)
+[ OK ] Pathogen installed
+[ OK ] Vim plugins ready
+[ OK ] Updated ~/.bashrc (history + PATH)
+[ OK ] yamllint installed (user)
+[ OK ] ruff installed (0.6.5)
+[ OK ] pylint installed (3.2.6)
+[ OK ] kubectl completion saved to ~/.bash_completion.d/kubectl
+[ OK ] oc completion saved to ~/.bash_completion.d/oc
+[ OK ] pbcopy/pbpaste installed under ~/.local/bin
+[ OK ] All done. For a fresh shell: exec bash -l
+```
+
+---
+
+## Versioning
+
+This project follows a practical changelog model (no strict semantic versioning).
+See [CHANGELOG.md](./CHANGELOG.md) for details.

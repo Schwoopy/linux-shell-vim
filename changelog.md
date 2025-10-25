@@ -4,115 +4,100 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.4.6] – 2025-10-25
+
+### Added
+- **Google Shell Style refactor**  
+  Rewritten to comply with the [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html):  
+  `set -euo pipefail`, uppercase constants, small pure helpers, early exits, and consistent quoting.
+- **Fedora 42 validation**  
+  Fedora 42 confirmed working end-to-end.  
+  README updated with explicit **Fedora 42 (✅ tested)** and **RHEL 9.x (🟡 pending)**.
+- **Optional Ghostty (Dracula theme)**  
+  Ghostty terminal support retained for Fedora/RHEL via COPR (`alternateved/ghostty`)  
+  and for Debian/Ubuntu (planned). Theme auto-applies Dracula when enabled.  
+  Disabled by default (`ENABLE_GHOSTTY=0`).
+
+### Changed
+- **BLE removed**  
+  Replaced all `ble.sh` logic with a simpler, portable **bash-completion** prompt setup.  
+  This avoids issues seen in PuTTY, standard Fedora terminal, and other non-interactive shells.
+- **Safer, smaller default footprint**
+  - No tmux installation or config logic (removed entirely).
+  - Ghostty kept but OFF by default.
+  - Clipboard helpers (`pbcopy` / `pbpaste`) remain **ON**.
+- **Python linter handling**  
+  - Ensures `~/.local/bin` is added to `PATH` both persistently and for the current shell.  
+  - Adds fallback reinstall logic if `ruff` or `pylint` aren’t visible immediately.
+- **Idempotent file healing**
+  - Maintains the post-update compaction and deduplication logic for `.bashrc` and `.vimrc`.
+  - Trims whitespace, removes duplicates, prevents repeated `PATH` exports.
+
+### Removed
+- **tmux and TPM support**  
+  All tmux configuration, Dracula theme setup, and TPM plugin logic removed.  
+  (Was originally added in 0.4.1–0.4.5; no longer shipped.)
+- **BLE (bash line editor)**  
+  Removed entirely for broader terminal compatibility.
+- **EPEL and external repos**  
+  Fully self-contained base repos + user-scope fallbacks only.
+
+### Fixed
+- **Duplicate PATH export prevention**  
+  Deduplication logic now runs before writing; prevents multiple `export PATH="$HOME/.local/bin:$PATH"` lines.
+- **Safer font detection**  
+  Checks with `fc-list` before downloading FiraCode Nerd Font again.
+- **Minor quoting and logging fixes**  
+  Cleaned legacy `awk` quoting warnings and redundant `[INFO]` entries.
+
+---
+
 ## [0.4.5] – 2025-10-09
 
 ### Added
-
-* **Automatic whitespace & duplicate cleanup**
-
-  * Added a **post-update compaction pass** for all managed dotfiles (`.bashrc`, `.vimrc`, `.tmux.conf`).
-  * Introduced:
-
-    * `compact_file()` — removes redundant blank lines and trailing whitespace.
-    * `dedupe_literal_line()` — ensures single instances of exact literal lines such as
-      `export PATH="$HOME/.local/bin:$PATH"`.
-  * Compaction runs automatically on every re-run, keeping files neat and idempotent.
-
-* **Healing re-run logic**
-
-  * The installer can now **repair previous installs** instead of overwriting:
-
-    * Removes duplicate managed blocks.
-    * Trims excess blank lines.
-    * Re-inserts missing managed sections cleanly.
-
-* **Safer user-scoped behavior**
-
-  * All file creation and directory modifications now occur strictly under the **current user**.
-  * **Full-path `chown` enforcement** — only absolute paths are used during ownership fixes.
-  * Ownership checks integrated via `ensure_user_ownership()` after writes.
-
-* **Improved backup and restore consistency**
-
-  * Every modification still generates a timestamped `.bak.YYYYMMDD_HHMMSS` backup.
-  * Compaction and deduplication **never** run on backup copies.
+- **Automatic whitespace & duplicate cleanup**
+  - Post-update compaction for `.bashrc`, `.vimrc`, `.tmux.conf`.
+  - Functions `compact_file()` and `dedupe_literal_line()` introduced.
+- **Healing re-run logic**
+  - Repairs previous installs without overwriting.
+- **Safer user-scoped behavior**
+  - Enforces absolute paths and user ownership after writes.
+- **Improved backup and restore consistency**
+  - Timestamped `.bak.YYYYMMDD_HHMMSS` backups remain untouched by compaction.
 
 ### Changed
-
-* **Sudo handling refinement**
-
-  * Root execution is **not required**; run as a normal user.
-  * Prompts for `sudo` **only when necessary** (e.g., installing packages, writing to `/usr/local/bin`).
-  * All `$HOME` content remains user-owned.
-
-* **Logging polish**
-
-  * Cleaner `[INFO]` and `[OK]` messages for deduplication, compaction, ownership repairs, and sudo prompts.
-  * Reduced redundant log lines while keeping important details.
-
-* **Block management simplification**
-
-  * Replaced warning-prone `awk` patterns with literal-safe logic.
-  * Reduced banner comments; each managed block now has a short, descriptive header.
-
-* **Defaults unchanged**
-
-  * `ENABLE_TMUX=0` (off by default).
-  * `ENABLE_GHOSTTY=0` (off by default).
-  * Clipboard helpers remain **on** (`ENABLE_PBTOOLS=1`).
+- Prompts for `sudo` only when necessary.
+- Cleaner `[INFO]` and `[OK]` log messages.
+- Simplified `awk` and block handling.
 
 ### Fixed
-
-* Eliminated `awk` escape warnings during `.bashrc` updates.
-* Prevented duplicate `PATH`/export lines from earlier versions.
-* Compactors avoid touching block delimiters.
-* Ensured empty files are (re)created safely before upserts.
-* Corrected legacy ownership created before 0.4.4.
-* Verified `.vimrc` and `.tmux.conf` compact and reformat safely on repeat runs.
+- Prevented duplicate PATH lines.
+- Trimmed excess blank lines.
+- `.vimrc` and `.bashrc` verified idempotent.
 
 ---
 
 ## [0.4.4] – 2025-10-08
-
-### Added
-
-* **Safer sudo handling** — prompts only when needed.
-* **Ownership & permissions verification** via `ensure_user_ownership()`.
-* **Improved clipboard integration** (`pbcopy`/`pbpaste`): user-owned, PATH exported automatically.
-
-### Changed
-
-* **Defaults**: tmux & Ghostty off; clipboard helpers on.
-* **PATH export logic**: simplified and idempotent.
-* **File safety**: backups on every write.
-* **Logging**: clearer, sectioned output.
-
-### Fixed
-
-* Ownership and `unbound variable` issues corrected.
-* Relative `chown` paths replaced with absolute.
-* Optional modules respect disable flags.
+- Safer sudo handling and ownership checks.
+- Clipboard integration improved (`pbcopy`/`pbpaste`).
+- Defaults: tmux & Ghostty off; clipboard on.
+- Logging clearer and more structured.
 
 ---
 
 ## [0.4.3] – 2025-10-07
-
-* Introduced cross-desktop **`pbcopy` / `pbpaste`** wrappers.
-* Documentation expanded with usage and backend detection.
-* Prevented duplicate PATH lines; improved session availability.
+- Added cross-desktop `pbcopy` / `pbpaste` wrappers.
+- Improved backend detection.
+- Prevented duplicate PATH exports.
 
 ---
 
 ## [0.4.2] – 2025-10-06
-
-* Ghostty config normalization (`config.conf` → `config`).
-* Dracula theme safety and caching improvements.
-* Fixed Ghostty reinstall loops and temp cleanup.
+- Ghostty config normalization and cache fixes.
+- Dracula theme stability improvements.
 
 ---
 
 ## [0.4.1] – 2025-10-05
-
-* Added **tmux menus/tabs UX** (Prefix + `m`, right-click menus, navigation keys).
-* Added **Ghostty Dracula caching** with 7-day skip window.
-* Fixed quoting and variable issues in tmux and Ghostty routines.
+- Added tmux Dracula theme and menu UX (now removed).
+- Ghostty Dracula caching introduced.
