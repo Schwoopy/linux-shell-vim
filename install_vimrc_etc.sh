@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
+# Dev Bootstrap (No EPEL, append-only configs, quiet logs)
+# - Installs base dev packages from system repos
+# - Falls back to user-scope installs for yamllint and Nerd Fonts
+# - Vim + Pathogen + curated plugins
+# - bash-completion, argcomplete (user), bash/python linters
+# - kubectl + oc installers (+ bash completions)
+# - Adds robust fzf Ctrl-R history support (user-scope ~/.fzf)
+# - Idempotent .bashrc/.vimrc upserts with backups
+
 set -euo pipefail
 
-# ==============================================================================
-# Dev Bootstrap (Non-Interactive, Append-Only, No EPEL dependency)
-# - Appends managed blocks to ~/.bashrc and ~/.vimrc (does NOT overwrite files)
-# - Creates yamllint config only if missing
-# - Vim + Pathogen + plugins
-# - fzf (user fallback if not packaged)
-# - argcomplete (user), Bash linters (shellcheck, shfmt), Python linters (ruff, pylint)
-# - kubectl + oc installers to /usr/local/bin (or ~/.local/bin fallback) + completions
-# - Writes Makefile + .shellcheckrc to help lint this script
-# - Optimized: no progress bar, clean INFO/WARN/OK logs
-# - BLE removed by request
-# ==============================================================================
-
-# --------------------------- CONFIG (edit here) -------------------------------
+###############################################################################
+# CONFIG (edit here)
+###############################################################################
 ENABLE_PACKAGES=1
 ENABLE_VIM_PLUGINS=1
 ENABLE_VIMRC=1
@@ -26,24 +24,21 @@ ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
 
-CLEAN_OUTPUT=1                  # 1 = suppress package manager/git noise
-LOG_FILE=""                     # e.g. "/tmp/bootstrap.log" (empty = no file log)
+CLEAN_OUTPUT=1                # 1 = suppress package manager/git noise
+LOG_FILE=""                   # e.g. "/tmp/bootstrap.log" (empty = no file log)
 
 VIM_DIR="$HOME/.vim"
 YAMLLINT_CONF="$HOME/.config/yamllint/config"
+BLE_BUILD_DIR="$HOME/.local/src/ble.sh"   # unused now (BLE removed)
 USER_BASH_COMPLETION_DIR="$HOME/.bash_completion.d"
 
-# Base packages (NO EPEL). Add unzip for Nerd Font fallback.
-PACKAGES_RHEL_BASE=(vim-enhanced git powerline-fonts yamllint curl make gawk bash-completion python3 python3-pip unzip)
+# Base packages (no EPEL). Add unzip for Nerd Font fallback.
+PACKAGES_RHEL_BASE=(vim-enhanced git powerline-fonts curl make gawk bash-completion python3 python3-pip unzip)
 PACKAGES_DEBIAN_BASE=(vim git fonts-powerline fzf yamllint curl make gawk bash-completion python3 python3-pip unzip)
 
-# Python linters (pin or empty for latest)
+# Python linters (pin or leave empty for latest)
 RUFF_VERSION="0.6.5"
 PYLINT_VERSION="3.2.6"
-
-# Optional versions for binary fallbacks
-SHELLCHECK_VERSION=""   # empty => use latest; otherwise e.g. "v0.10.0"
-SHFMT_VERSION=""        # empty => use latest; otherwise e.g. "v3.7.0"
 
 # kubectl/oc versions
 KUBECTL_VERSION="v1.31.1"
@@ -64,8 +59,9 @@ ale=https://github.com/dense-analysis/ale
 EOF
 )"
 
-# ==============================================================================
-# Logging helpers
+###############################################################################
+# Logging & helpers
+###############################################################################
 _have_tty() { [[ -t 1 ]] || [[ -w /dev/tty ]]; }
 _to_tty()   { if [[ -w /dev/tty ]]; then printf "%b" "$*" > /dev/tty; else printf "%b" "$*"; fi; }
 _logfile()  { if [[ -n "$LOG_FILE" ]]; then printf "%b" "$*" >> "$LOG_FILE"; fi; }
@@ -75,13 +71,9 @@ warn() { log "\033[1;33m[WARN]\033[0m $*\n"; }
 ok()   { log "\033[1;32m[ OK ]\033[0m $*\n"; }
 err()  { log "\033[1;31m[ERR ]\033[0m $*\n"; }
 
-# Prepare log dir if set
 if [[ -n "$LOG_FILE" ]]; then mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true; fi
-
-# Error diagnostics
 trap 'err "Failed: \"$BASH_COMMAND\" at ${BASH_SOURCE[0]}:${LINENO}"' ERR
 
-# Privilege helper
 SUDO() {
   if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
     "$@"
@@ -92,7 +84,6 @@ SUDO() {
   fi
 }
 
-# Exec helper (no bash -c), respects CLEAN_OUTPUT and LOG_FILE
 exec_run() {
   if [[ -n "$LOG_FILE" ]]; then
     if (( CLEAN_OUTPUT )); then "$@" >>"$LOG_FILE" 2>&1; else "$@" 2>&1 | tee -a "$LOG_FILE"; fi
@@ -101,7 +92,6 @@ exec_run() {
   fi
 }
 
-# Temp files + cleanup
 TMPFILES=()
 mktempf() { local t; t="$(mktemp)"; TMPFILES+=("$t"); printf '%s' "$t"; }
 cleanup() {
@@ -119,25 +109,6 @@ backup_file() {
   fi
 }
 
-# ------------------------------------------------------------------------------
-# PATH helpers
-ensure_local_bin_path() {
-  case ":$PATH:" in
-    *":$HOME/.local/bin:"*) : ;;
-    *)
-      export PATH="$HOME/.local/bin:$PATH"
-      info "Added ~/.local/bin to PATH (current shell)"
-      if ! grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.bashrc" 2>/dev/null; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-        info "Appended PATH export to ~/.bashrc"
-      fi
-      hash -r || true
-      ;;
-  esac
-}
-
-# ------------------------------------------------------------------------------
-# Newline-safe block writer (prevents extra blank lines on reruns)
 _write_block_clean() {
   # $1=file, $2=tmpfile-with-existing-content, $3=start_line, $4=end_line, $5=body
   local file="$1" tmp="$2" start_line="$3" end_line="$4" body="$5"
@@ -152,7 +123,7 @@ _write_block_clean() {
     printf '\n'
   } > "$file"
 
-  # strip all leading blank lines (defensive)
+  # strip only leading blank lines
   local t2; t2="$(mktempf)"
   awk '
     BEGIN { seen_nonblank=0 }
@@ -166,7 +137,6 @@ _write_block_clean() {
   ' "$file" > "$t2" && mv "$t2" "$file"
 }
 
-# Exact-marker upsert (for .bashrc)
 upsert_block() {
   local file="$1" start="$2" end="$3" content="$4"
   [[ -f "$file" ]] || : > "$file"
@@ -185,7 +155,6 @@ upsert_block() {
   ok "Updated $file ($start)"
 }
 
-# Greedy Vim upsert: remove FIRST start token..LAST end token, then append once
 upsert_vim_block() {
   local file="$1" body="$2"
   [[ -f "$file" ]] || : > "$file"
@@ -211,7 +180,6 @@ upsert_vim_block() {
   ok "Ensured single managed Vim block in $file"
 }
 
-# Generic greedy token-based upsert (for .bashrc blocks)
 upsert_block_by_token() {
   # $1=file, $2=start_token, $3=end_token, $4=start_line, $5=end_line, $6=body
   local file="$1" s_tok="$2" e_tok="$3" start_line="$4" end_line="$5" body="$6"
@@ -243,7 +211,9 @@ upsert_block_by_token() {
   ok "Updated $file (${s_tok}…${e_tok})"
 }
 
-# Detect OS
+###############################################################################
+# OS & packages
+###############################################################################
 detect_os() {
   . /etc/os-release 2>/dev/null || { err "Missing /etc/os-release"; exit 1; }
   local id_like="${ID_LIKE:-}"
@@ -257,14 +227,14 @@ detect_os() {
   info "OS family: $OS_FAMILY (ID=${ID})"
 }
 
-# Packages (no EPEL)
 install_packages_common() {
   mkdir -p "$HOME/.config/yamllint" "$HOME/files" "$VIM_DIR" "$VIM_DIR/autoload" "$VIM_DIR/bundle" \
-           "$HOME/.local/share" "$USER_BASH_COMPLETION_DIR" || true
+           "$HOME/.local/share" "$HOME/.local/bin" "$USER_BASH_COMPLETION_DIR" || true
   chmod 0755 "$HOME/.config" "$HOME/.config/yamllint" "$HOME/files" "$VIM_DIR" "$HOME/.local/share" \
              "$USER_BASH_COMPLETION_DIR" || true
   chmod 0750 "$VIM_DIR" "$VIM_DIR/autoload" "$VIM_DIR/bundle" || true
 }
+
 install_packages() {
   install_packages_common
   if [[ "$OS_FAMILY" == "redhat" ]]; then
@@ -285,19 +255,9 @@ install_packages() {
   ok "Packages installed (system repos only; no EPEL)."
 }
 
-# fzf fallback (user-scope) if system package missing
-ensure_fzf_user() {
-  if command -v fzf >/dev/null 2>&1; then info "fzf found in PATH"; return 0; fi
-  if [[ -d "$HOME/.fzf" ]]; then info "fzf directory exists at ~/.fzf (assuming installed)"; return 0; fi
-  if ! command -v git >/dev/null 2>&1; then warn "git missing; cannot install fzf user-scope"; return 0; fi
-  info "Installing fzf to ~/.fzf (user-scope; no EPEL)"
-  exec_run git clone -q --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"
-  exec_run "$HOME/.fzf/install" --key-bindings --completion --no-update-rc
-  ensure_local_bin_path
-  ok "fzf installed to ~/.fzf"
-}
-
-# -------------------- FALLBACKS (no EPEL): yamllint & fonts -------------------
+###############################################################################
+# Fallbacks: fzf (user), yamllint (user via pip), Nerd Fonts (user)
+###############################################################################
 ensure_pip() {
   if python3 -m pip --version >/dev/null 2>&1; then return 0; fi
   if python3 -m ensurepip --version >/dev/null 2>&1; then exec_run python3 -m ensurepip --upgrade; fi
@@ -307,47 +267,41 @@ ensure_pip() {
       else exec_run SUDO yum -y -q install python3-pip || true
       fi
     else
-      exec_run SUDO apt-get -qq -y install python3-pip
+      exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install python3-pip
     fi
   fi
   python3 -m pip --version >/dev/null 2>&1 || { err "pip not available"; return 1; }
 }
 
-# --- argcomplete (user-scope) ---
-install_argcomplete() {
-  ensure_pip || { warn "pip unavailable; cannot install argcomplete"; return 1; }
-
-  export PIP_DISABLE_PIP_VERSION_CHECK=1
-  export PIP_ROOT_USER_ACTION=ignore
-
-  info "Installing argcomplete (user-scope)"
-  exec_run python3 -m pip install --user --upgrade --upgrade-strategy only-if-needed argcomplete
-
-  mkdir -p "$USER_BASH_COMPLETION_DIR"
-
-  if command -v activate-global-python-argcomplete >/dev/null 2>&1; then
-    exec_run activate-global-python-argcomplete --dest "$USER_BASH_COMPLETION_DIR"
-    ok "argcomplete activated (user-scope)"
-  else
-    python3 - <<'PY' 2>/dev/null || { warn "argcomplete not importable; skipping user loader"; return 0; }
-import importlib, sys
-try:
-    importlib.import_module("argcomplete"); sys.exit(0)
-except Exception:
-    sys.exit(1)
-PY
-    cat > "$USER_BASH_COMPLETION_DIR/python-argcomplete.sh" <<'EOS'
-# user-scope argcomplete loader
-if command -v register-python-argcomplete >/dev/null 2>&1; then
-  for cmd in pip pip3 python3 git kubectl oc terraform ansible ansible-playbook; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-      eval "$(register-python-argcomplete "$cmd")"
-    fi
-  done
-fi
-EOS
-    ok "argcomplete user loader created at $USER_BASH_COMPLETION_DIR/python-argcomplete.sh"
+ensure_fzf_user() {
+  # If fzf exists anywhere on PATH, keep existing setup.
+  if command -v fzf >/dev/null 2>&1; then
+    info "fzf found in PATH ($(command -v fzf))"
+    return 0
   fi
+  # If user install already present, just expose it to PATH and return.
+  if [[ -x "$HOME/.fzf/bin/fzf" ]]; then
+    info "fzf already installed at ~/.fzf; ensuring PATH"
+    if [[ ":$PATH:" != *":$HOME/.fzf/bin:"* ]]; then
+      export PATH="$HOME/.fzf/bin:$PATH"
+      info "Added ~/.fzf/bin to PATH (current shell)"
+    fi
+    return 0
+  fi
+  # Fresh user-scope install (no EPEL needed)
+  if ! command -v git >/dev/null 2>&1; then
+    warn "git missing; cannot install fzf user-scope"
+    return 0
+  fi
+  info "Installing fzf to ~/.fzf (user-scope; no EPEL)"
+  exec_run git clone -q --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"
+  exec_run "$HOME/.fzf/install" --key-bindings --completion --no-update-rc
+  # Ensure ~/.fzf/bin on PATH now
+  if [[ ":$PATH:" != *":$HOME/.fzf/bin:"* ]]; then
+    export PATH="$HOME/.fzf/bin:$PATH"
+    info "Added ~/.fzf/bin to PATH (current shell)"
+  fi
+  ok "fzf installed to ~/.fzf"
 }
 
 ensure_yamllint_user() {
@@ -357,15 +311,18 @@ ensure_yamllint_user() {
   fi
   ensure_pip || { warn "pip unavailable; cannot install yamllint user-scope"; return 1; }
   exec_run python3 -m pip install --user --upgrade yamllint || { warn "Failed installing yamllint via pip"; return 1; }
-  ensure_local_bin_path
-  if command -v yamllint >/dev/null 2>&1; then ok "yamllint installed (user)"; else err "yamllint not found after install"; fi
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    export PATH="$HOME/.local/bin:$PATH"
+    info "Added ~/.local/bin to PATH"
+  fi
+  command -v yamllint >/dev/null 2>&1 && ok "yamllint installed (user)" || err "yamllint not found after install"
 }
 
-# --- Nerd Fonts: detect + install (user-scope, idempotent) ---
 font_installed() {
   local family="${1:-FiraCode Nerd Font}"
   if command -v fc-list >/dev/null 2>&1; then
-    if fc-list : family | grep -iFq "$family"; then return 0; fi
+    fc-list : family | grep -iFq "$family" && return 0
   fi
   local ufonts="$HOME/.local/share/fonts"
   if find "$ufonts" -type f \( -iname "*$(echo "$family" | tr -d ' ')*.ttf" -o -iname "*FiraCodeNerdFont*.ttf" \) 2>/dev/null | grep -q .; then
@@ -373,6 +330,7 @@ font_installed() {
   fi
   return 1
 }
+
 install_nerd_fonts_user() {
   local family="${1:-FiraCode Nerd Font}"
   local zip="${2:-FiraCode.zip}"
@@ -380,11 +338,11 @@ install_nerd_fonts_user() {
   local dest="$HOME/.local/share/fonts"
 
   if font_installed "$family"; then
-    info "Nerd Font already present: $family (skipping download)"
+    info "Nerd Font already present: $family"
     return 0
   fi
 
-  info "Installing Nerd Font (user-scope): $family"
+  info "Installing Nerd Font (user): $family"
   mkdir -p "$dest"
   local tmpd; tmpd="$(mktemp -d)" || { warn "mktemp failed for fonts"; return 1; }
   (
@@ -396,21 +354,22 @@ install_nerd_fonts_user() {
   ) || { warn "Nerd Font download/install failed: ${zip}"; rm -rf "$tmpd"; return 1; }
   rm -rf "$tmpd"
   if command -v fc-cache >/dev/null 2>&1; then fc-cache -f "$dest" >/dev/null 2>&1 || true; fi
-  if font_installed "$family"; then ok "Installed Nerd Font: $family"; else warn "Font not visible yet: $family"; fi
+  font_installed "$family" && ok "Installed Nerd Font: $family" || warn "Font not visible yet: $family"
 }
+
 ensure_powerline_glyphs() {
   local family="${1:-FiraCode Nerd Font}"
   local zip="${2:-FiraCode.zip}"
   if command -v fc-list >/dev/null 2>&1 && fc-list : family | grep -qiE 'Nerd Font|Powerline'; then
-    info "Powerline/Nerd fonts already available (fontconfig)"; return 0
-  fi
-  if fc-list : family 2>/dev/null | grep -qi 'Powerline'; then
-    info "Powerline fonts detected via system fontconfig"; return 0
+    info "Powerline/Nerd fonts available"
+    return 0
   fi
   install_nerd_fonts_user "$family" "$zip"
 }
 
+###############################################################################
 # Vim
+###############################################################################
 ensure_pathogen() {
   local dest="$VIM_DIR/autoload/pathogen.vim"
   [[ -f "$dest" ]] && { info "Pathogen present."; return 0; }
@@ -418,6 +377,7 @@ ensure_pathogen() {
   exec_run curl -fsSL -o "$dest" https://tpo.pe/pathogen.vim
   ok "Pathogen installed."
 }
+
 deploy_plugins() {
   command -v git >/dev/null 2>&1 || { err "git is required"; exit 1; }
   local line name url dest
@@ -437,7 +397,6 @@ deploy_plugins() {
   ok "Vim plugins ready."
 }
 
-# --- managed Vim block (body-only; markers added by upsert_vim_block) ---
 vimrc_body_block() {
 cat <<'EOF'
 " Managed by install_vimrc_etc.sh — safe to remove or move as you like.
@@ -472,13 +431,16 @@ let g:ale_sign_column_always = 1
 let g:indentLine_char = '│'
 EOF
 }
+
 install_vimrc_block() {
   local f="$HOME/.vimrc"
   [[ -f "$f" ]] || : > "$f"
   upsert_vim_block "$f" "$(vimrc_body_block)"
 }
 
-# Yamllint config
+###############################################################################
+# yamllint config
+###############################################################################
 write_default_yamllint() {
 cat <<'EOF'
 # --- Managed by install_vimrc_etc.sh ---
@@ -494,6 +456,7 @@ rules:
   document-start: disable
 EOF
 }
+
 install_yamllint_conf() {
   if [[ -f "$YAMLLINT_CONF" ]]; then
     info "yamllint config exists at $YAMLLINT_CONF — leaving it untouched."
@@ -505,7 +468,9 @@ install_yamllint_conf() {
   ok "Yamllint config created at $YAMLLINT_CONF"
 }
 
-# --- Bashrc blocks (token-based greedy upsert) ---
+###############################################################################
+# Bashrc blocks
+###############################################################################
 eternal_history_block() {
 cat <<'EOF'
 export HISTFILESIZE=
@@ -528,7 +493,63 @@ fi
 PROMPT_DIRTRIM=2
 EOF
 }
-install_bashrc_block() {
+
+# NEW: Robust FZF setup (PATH + key-bindings + Ctrl-R fallback)
+fzf_bashrc_block() {
+cat <<'EOF'
+# --- FZF user-scope setup (idempotent) ---
+# Ensure ~/.fzf/bin on PATH (once)
+if [[ ":$PATH:" != *":$HOME/.fzf/bin:"* ]]; then
+  export PATH="$HOME/.fzf/bin:$PATH"
+fi
+
+# Load keybindings/completion from common locations
+if [[ $- == *i* ]]; then
+  # System key-bindings (varies by distro)
+  if [[ -r /usr/share/fzf/key-bindings.bash ]]; then
+    # shellcheck source=/usr/share/fzf/key-bindings.bash
+    source /usr/share/fzf/key-bindings.bash
+  elif [[ -r /usr/share/fzf/shell/key-bindings.bash ]]; then
+    # shellcheck source=/usr/share/fzf/shell/key-bindings.bash
+    source /usr/share/fzf/shell/key-bindings.bash
+  fi
+  # System completion
+  if [[ -r /usr/share/fzf/completion.bash ]]; then
+    # shellcheck source=/usr/share/fzf/completion.bash
+    source /usr/share/fzf/completion.bash
+  elif [[ -r /usr/share/fzf/shell/completion.bash ]]; then
+    # shellcheck source=/usr/share/fzf/shell/completion.bash
+    source /usr/share/fzf/shell/completion.bash
+  fi
+
+  # User-scope (~/.fzf)
+  [[ -r "$HOME/.fzf/shell/key-bindings.bash" ]] && source "$HOME/.fzf/shell/key-bindings.bash"
+  [[ -r "$HOME/.fzf/shell/completion.bash"   ]] && source "$HOME/.fzf/shell/completion.bash"
+
+  # Nice defaults
+  : "${FZF_DEFAULT_OPTS:=--height=40% --layout=reverse --border}"
+  : "${FZF_CTRL_R_OPTS:=--sort}"
+
+  # Fallback Ctrl-R widget if official one didn't load
+  if ! declare -F __fzf_history__ >/dev/null; then
+    fzf_history_widget_fallback() {
+      local selected
+      selected="$(
+        HISTTIMEFORMAT= builtin history \
+          | sed 's/^[ ]*[0-9]\+[ ]*//' \
+          | tac \
+          | fzf ${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS} --tiebreak=index --query="$READLINE_LINE"
+      )" || return
+      READLINE_LINE="$selected"; READLINE_POINT=${#READLINE_LINE}
+    }
+    bind -x '"\C-r": fzf_history_widget_fallback'
+  fi
+fi
+# --- end FZF user-scope setup ---
+EOF
+}
+
+install_bashrc_history_block() {
   local f="$HOME/.bashrc"
   [[ -f "$f" ]] || : > "$f"
   upsert_block_by_token \
@@ -540,7 +561,107 @@ install_bashrc_block() {
     "$(eternal_history_block)"
 }
 
-# --------------------------- Arch & fetch helpers -----------------------------
+install_bashrc_fzf_block() {
+  local f="$HOME/.bashrc"
+  [[ -f "$f" ]] || : > "$f"
+  upsert_block_by_token \
+    "$f" \
+    "FZF_USER_START" \
+    "FZF_USER_END" \
+    "# >>> FZF_USER_START >>>" \
+    "# <<< FZF_USER_END <<<" \
+    "$(fzf_bashrc_block)"
+}
+
+###############################################################################
+# pip / argcomplete / linters
+###############################################################################
+install_argcomplete() {
+  ensure_pip || { warn "pip unavailable; cannot install argcomplete"; return 1; }
+  export PIP_DISABLE_PIP_VERSION_CHECK=1
+  export PIP_ROOT_USER_ACTION=ignore
+
+  info "Installing argcomplete (user-scope)"
+  exec_run python3 -m pip install --user --upgrade --upgrade-strategy only-if-needed argcomplete
+
+  mkdir -p "$USER_BASH_COMPLETION_DIR"
+  if command -v activate-global-python-argcomplete >/dev/null 2>&1; then
+    exec_run activate-global-python-argcomplete --dest "$USER_BASH_COMPLETION_DIR"
+    ok "argcomplete activated (user-scope)"
+  else
+    python3 - <<'PY' 2>/dev/null || { warn "argcomplete not importable; skipping user loader"; return 0; }
+import importlib, sys
+try:
+    import importlib; importlib.import_module("argcomplete"); sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+    cat > "$USER_BASH_COMPLETION_DIR/python-argcomplete.sh" <<'EOS'
+# user-scope argcomplete loader
+if command -v register-python-argcomplete >/dev/null 2>&1; then
+  for cmd in pip pip3 python3 git kubectl oc terraform ansible ansible-playbook; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      eval "$(register-python-argcomplete "$cmd")"
+    fi
+  done
+fi
+EOS
+    ok "argcomplete user loader created at $USER_BASH_COMPLETION_DIR/python-argcomplete.sh"
+  fi
+}
+
+install_python_linters() {
+  ensure_pip || return 1
+  local ruff_spec="ruff";   [[ -n "$RUFF_VERSION"   ]] && ruff_spec="ruff==${RUFF_VERSION}"
+  local pyl_spec="pylint";  [[ -n "$PYLINT_VERSION" ]] && pyl_spec="pylint==${PYLINT_VERSION}"
+  info "Installing Python linters: ${ruff_spec} ${pyl_spec} (user-scope)"
+  exec_run python3 -m pip install --user --upgrade ${ruff_spec} ${pyl_spec}
+
+  # Ensure ~/.local/bin on PATH (current + persist)
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+    info "Added ~/.local/bin to PATH (current shell)"
+    if ! grep -qE '(^|:)\$HOME/\.local/bin(:|$)|(^|:)~/.local/bin(:|$)' "$HOME/.bashrc" 2>/dev/null; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+      info "Appended PATH export to ~/.bashrc"
+    fi
+    hash -r || true
+  fi
+
+  # Extra safety: if not visible, reinstall explicitly
+  if ! command -v ruff >/dev/null 2>&1 || ! command -v pylint >/dev/null 2>&1; then
+    warn "ruff/pylint not visible yet; reinstalling explicitly to user site"
+    local re_ruff="ruff"; [[ -n "$RUFF_VERSION" ]] && re_ruff="ruff==${RUFF_VERSION}"
+    local re_pyl="pylint"; [[ -n "$PYLINT_VERSION" ]] && re_pyl="pylint==${PYLINT_VERSION}"
+    exec_run python3 -m pip install --user --upgrade "$re_ruff" "$re_pyl"
+    hash -r || true
+  fi
+
+  command -v ruff >/dev/null 2>&1 && ok "ruff installed ($(ruff --version 2>/dev/null | awk '{print $2}'))" || warn "ruff missing"
+  command -v pylint >/dev/null 2>&1 && ok "pylint installed ($(pylint --version 2>/dev/null | awk 'NR==1{print $2}'))" || warn "pylint missing"
+}
+
+install_bash_linters() {
+  info "Installing Bash linters (shellcheck, shfmt)"
+  if [[ "$OS_FAMILY" == "redhat" ]]; then
+    if command -v dnf >/dev/null 2>&1; then
+      exec_run SUDO dnf -y -q install shellcheck || warn "shellcheck not in base repos"
+      exec_run SUDO dnf -y -q install shfmt      || warn "shfmt not in base repos"
+    else
+      exec_run SUDO yum -y -q install shellcheck || warn "shellcheck not in base repos"
+      exec_run SUDO yum -y -q install shfmt      || warn "shfmt not in base repos"
+    fi
+  else
+    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shellcheck || warn "shellcheck not available"
+    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shfmt      || warn "shfmt not available"
+  fi
+  command -v shellcheck >/dev/null 2>&1 && ok "shellcheck installed" || warn "shellcheck missing"
+  command -v shfmt      >/dev/null 2>&1 && ok "shfmt installed"      || warn "shfmt missing"
+}
+
+###############################################################################
+# kubectl + oc
+###############################################################################
 K_ARCH="amd64"
 detect_arch() {
   local u; u="$(uname -m)"
@@ -553,144 +674,8 @@ detect_arch() {
     *)              K_ARCH="amd64"; warn "Unknown arch $u; defaulting to amd64" ;;
   esac
 }
-fetch() { # fetch <url> <dest>
-  curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 -H 'User-Agent: dev-bootstrap/1.0' -o "$2" "$1"
-}
+fetch() { curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 -H 'User-Agent: dev-bootstrap/1.0' -o "$2" "$1"; }
 
-# --------------------- User-scope fallbacks: shellcheck & shfmt ---------------
-ensure_shellcheck_user() {
-  if command -v shellcheck >/dev/null 2>&1; then
-    ok "shellcheck already present: $(command -v shellcheck)"
-    return 0
-  fi
-  detect_arch
-  ensure_local_bin_path
-  local sc_arch=""
-  case "$K_ARCH" in
-    amd64)  sc_arch="x86_64" ;;
-    arm64)  sc_arch="aarch64" ;;
-    *)      warn "Unsupported arch for shellcheck fallback: $K_ARCH"; return 1 ;;
-  esac
-  local base="https://github.com/koalaman/shellcheck/releases"
-  local url=""
-  if [[ -n "$SHELLCHECK_VERSION" ]]; then
-    url="${base}/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${sc_arch}.tar.xz"
-  else
-    url="${base}/latest/download/shellcheck-latest.linux.${sc_arch}.tar.xz"
-  fi
-  local tmpd; tmpd="$(mktemp -d)" || { warn "mktemp failed for shellcheck"; return 1; }
-  info "Installing shellcheck (user-scope) from $url"
-  (
-    set -e
-    cd "$tmpd"
-    fetch "$url" shellcheck.tar.xz
-    tar -xJf shellcheck.tar.xz
-    # find the binary
-    local bin
-    bin="$(find . -type f -name shellcheck -perm -111 | head -n1 || true)"
-    [[ -n "$bin" ]] || { echo "shellcheck binary not found in archive"; exit 2; }
-    install -m 0755 "$bin" "$HOME/.local/bin/shellcheck"
-  ) || { rm -rf "$tmpd"; warn "shellcheck fallback install failed"; return 1; }
-  rm -rf "$tmpd"
-  if command -v shellcheck >/dev/null 2>&1; then ok "shellcheck installed to ~/.local/bin/shellcheck"; else warn "shellcheck still not visible"; fi
-}
-
-ensure_shfmt_user() {
-  if command -v shfmt >/dev/null 2>&1; then
-    ok "shfmt already present: $(command -v shfmt)"
-    return 0
-  fi
-  detect_arch
-  ensure_local_bin_path
-  local sf_arch=""
-  case "$K_ARCH" in
-    amd64)  sf_arch="amd64" ;;
-    arm64)  sf_arch="arm64" ;;
-    *)      warn "Unsupported arch for shfmt fallback: $K_ARCH"; return 1 ;;
-  esac
-  local base="https://github.com/mvdan/sh/releases"
-  local url=""
-  if [[ -n "$SHFMT_VERSION" ]]; then
-    url="${base}/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION#v}_linux_${sf_arch}"
-    # Some releases use "shfmt_vX.Y.Z_linux_amd64"
-    [[ "$url" =~ /shfmt_[0-9] ]] || url="${base}/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_${sf_arch}"
-    # And a common older naming:
-    [[ "$url" =~ /shfmt_ ]] || url="${base}/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_${sf_arch}"
-  else
-    # Common "latest" asset name used by project
-    url="${base}/latest/download/shfmt_linux_${sf_arch}"
-  fi
-  local tmpf; tmpf="$(mktempf)"
-  info "Installing shfmt (user-scope) from $url"
-  if ! fetch "$url" "$tmpf"; then
-    warn "shfmt latest download failed, trying legacy naming"
-    local alt="${base}/latest/download/shfmt_v3.7.0_linux_${sf_arch}"
-    if ! fetch "$alt" "$tmpf"; then
-      warn "shfmt fallback failed"
-      return 1
-    fi
-  fi
-  install -m 0755 "$tmpf" "$HOME/.local/bin/shfmt"
-  if command -v shfmt >/dev/null 2>&1; then ok "shfmt installed to ~/.local/bin/shfmt"; else warn "shfmt still not visible"; fi
-}
-
-# --------------------------- Bash linters (with fallbacks) --------------------
-install_bash_linters() {
-  info "Installing Bash linters (shellcheck, shfmt)"
-  if [[ "$OS_FAMILY" == "redhat" ]]; then
-    if command -v dnf >/dev/null 2>&1; then
-      exec_run SUDO dnf -y -q install shellcheck || true
-      exec_run SUDO dnf -y -q install shfmt      || true
-    else
-      exec_run SUDO yum -y -q install shellcheck || true
-      exec_run SUDO yum -y -q install shfmt      || true
-    fi
-  else
-    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shellcheck || true
-    exec_run SUDO DEBIAN_FRONTEND=noninteractive apt-get -qq -y install shfmt      || true
-  fi
-
-  # user-scope fallbacks if still missing
-  command -v shellcheck >/dev/null 2>&1 || ensure_shellcheck_user || true
-  command -v shfmt      >/dev/null 2>&1 || ensure_shfmt_user      || true
-
-  command -v shellcheck >/dev/null 2>&1 && ok "shellcheck available" || warn "shellcheck missing (consider manual install)"
-  command -v shfmt      >/dev/null 2>&1 && ok "shfmt available"      || warn "shfmt missing (consider manual install)"
-}
-
-# --------------------------- Python linters (+ PATH) --------------------------
-install_python_linters() {
-  ensure_pip || return 1
-  local ruff_spec="ruff";   [[ -n "$RUFF_VERSION"   ]] && ruff_spec="ruff==${RUFF_VERSION}"
-  local pyl_spec="pylint";  [[ -n "$PYLINT_VERSION" ]] && pyl_spec="pylint==${PYLINT_VERSION}"
-  info "Installing Python linters: ${ruff_spec} ${pyl_spec} (user-scope)"
-  exec_run python3 -m pip install --user --upgrade ${ruff_spec} ${pyl_spec}
-
-  ensure_local_bin_path
-
-  # If still missing, reinstall explicitly with pinned versions
-  if ! command -v ruff >/dev/null 2>&1 || ! command -v pylint >/dev/null 2>&1; then
-    warn "ruff/pylint not visible yet; reinstalling explicitly to user site"
-    local re_ruff="ruff"; [[ -n "$RUFF_VERSION" ]] && re_ruff="ruff==${RUFF_VERSION}"
-    local re_pyl="pylint"; [[ -n "$PYLINT_VERSION" ]] && re_pyl="pylint==${PYLINT_VERSION}"
-    exec_run python3 -m pip install --user --upgrade "$re_ruff" "$re_pyl"
-    hash -r || true
-  fi
-
-  # Verify
-  if command -v ruff >/dev/null 2>&1; then
-    ok "ruff installed ($(ruff --version 2>/dev/null | awk '{print $2}'))"
-  else
-    warn "ruff missing (ensure ~/.local/bin is on PATH)"
-  fi
-  if command -v pylint >/dev/null 2>&1; then
-    ok "pylint installed ($(pylint --version 2>/dev/null | awk 'NR==1{print $2}'))"
-  else
-    warn "pylint missing (ensure ~/.local/bin is on PATH)"
-  fi
-}
-
-# --------------------------- kubectl + oc installers --------------------------
 install_oc_kubectl() {
   detect_arch
   local sysbindir="/usr/local/bin"
@@ -700,16 +685,15 @@ install_oc_kubectl() {
   if ! SUDO test -w "$sysbindir" >/dev/null 2>&1; then
     bindir="$userbindir"
     mkdir -p "$bindir"
-    case ":$PATH:" in *":$bindir:"*) : ;; *)
+    if [[ ":$PATH:" != *":$bindir:"* ]]; then
       warn "Add $bindir to PATH: export PATH=\"$bindir:\$PATH\""
-    esac
+    fi
     info "Using user install dir $bindir (no root write)."
   fi
 
   local kubectl_url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${K_ARCH}/kubectl"
   local oc_url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_CHANNEL}/openshift-client-linux.tar.gz"
 
-  # kubectl
   if ! command -v kubectl >/dev/null 2>&1; then
     fetch "$kubectl_url" /tmp/kubectl
     chmod +x /tmp/kubectl
@@ -722,7 +706,6 @@ install_oc_kubectl() {
     ok "kubectl already present"
   fi
 
-  # oc
   if ! command -v oc >/dev/null 2>&1; then
     fetch "$oc_url" /tmp/oc.tar.gz
     tar -xzf /tmp/oc.tar.gz -C /tmp oc 2>/dev/null || true
@@ -737,7 +720,6 @@ install_oc_kubectl() {
     ok "oc already present"
   fi
 
-  # completions (user-scope)
   mkdir -p "$USER_BASH_COMPLETION_DIR"
   if command -v kubectl >/dev/null 2>&1; then
     kubectl completion bash > "$USER_BASH_COMPLETION_DIR/kubectl" || true
@@ -749,7 +731,9 @@ install_oc_kubectl() {
   fi
 }
 
-# Repo tooling (Makefile + .shellcheckrc) next to this script
+###############################################################################
+# Repo tooling
+###############################################################################
 write_repo_tooling() {
   local script_path="${BASH_SOURCE[0]:-$(pwd)/install_vimrc_etc.sh}"
   local script_dir; script_dir="$(cd "$(dirname "$script_path")" && pwd)"
@@ -777,7 +761,6 @@ RC
   ok "Repo tooling written: Makefile and .shellcheckrc"
 }
 
-# Source bashrc safely
 safe_source_bashrc() {
   if [[ -r "$HOME/.bashrc" ]]; then
     set +u; BASHRCSOURCED=1; . "$HOME/.bashrc" || true; set -u
@@ -786,7 +769,9 @@ safe_source_bashrc() {
   fi
 }
 
+###############################################################################
 # Main
+###############################################################################
 main() {
   info "Dev Bootstrap starting (append-only; no EPEL required)"
   detect_os
@@ -800,21 +785,21 @@ main() {
     ensure_yamllint_user
   fi
 
-  # fzf (user fallback)
+  # fzf: if missing from system, install user-scope & ensure PATH
   ensure_fzf_user
 
   if [[ "$ENABLE_VIM_PLUGINS" -eq 1 ]]; then ensure_pathogen; deploy_plugins; else warn "Skipping Vim plugins."; fi
   if [[ "$ENABLE_VIMRC" -eq 1 ]]; then install_vimrc_block; else warn "Skipping ~/.vimrc block."; fi
   if [[ "$ENABLE_YAMLLINT" -eq 1 ]]; then install_yamllint_conf; else warn "Skipping yamllint config."; fi
 
-  if [[ "$ENABLE_BASHRC" -eq 1 ]]; then install_bashrc_block; else warn "Skipping ~/.bashrc history/prompt block."; fi
-
-  if [[ "$ENABLE_ARGCOMPLETE" -eq 1 ]]; then
-    install_argcomplete || true
+  if [[ "$ENABLE_BASHRC" -eq 1 ]]; then
+    install_bashrc_history_block
+    install_bashrc_fzf_block   # NEW robust fzf PATH + key bindings + Ctrl-R fallback
   else
-    warn "Skipping argcomplete."
+    warn "Skipping ~/.bashrc blocks."
   fi
 
+  if [[ "$ENABLE_ARGCOMPLETE" -eq 1 ]]; then install_argcomplete; else warn "Skipping argcomplete."; fi
   if [[ "$ENABLE_BASH_LINTERS" -eq 1 ]]; then install_bash_linters; else warn "Skipping bash linters."; fi
   if [[ "$ENABLE_PY_LINTERS" -eq 1 ]]; then install_python_linters; else warn "Skipping python linters."; fi
 
