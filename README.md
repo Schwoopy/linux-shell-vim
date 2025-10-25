@@ -1,150 +1,138 @@
 # Dev Bootstrap Installer
 
-This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a modern developer environment across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
+This project provides a **non-interactive Bash installer script** (`install_vimrc_etc.sh`) that bootstraps a development environment consistently across **Debian/Ubuntu** and **RHEL/Rocky/Fedora** systems.
 
-It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, and Python/Bash linters — with **safe append-only config management**, **healing re-runs**, and **clean, compact logging**.
+It installs and configures common developer tools, Vim plugins, Bash enhancements, Kubernetes CLIs, and linters — with **safe append-only config management** (no overwrites), **idempotent re-runs**, and **clean logging** (no progress bars).
 
-It also installs **cross-desktop clipboard helpers** (`pbcopy` and `pbpaste`) for Linux, WSL, and macOS-style interoperability.
-
----
-
-## Platform Support and Test Status
-
-- Tested:
-  - Fedora 42
-- Pending testing:
-  - RHEL 9.x
-- Currently untested:
-  - Rocky Linux 9.x  
-  - AlmaLinux 9.x  
-  - Ubuntu 22.04 / 24.04  
-  - Debian 12 (Bookworm)  
-  - Fedora 41 / 40  
-  - Linux Mint 21.x  
-  - WSL (Ubuntu/Debian)
-
-If something breaks on your distribution, please open an issue with logs.
+> Note: **BLE**, **Ghostty**, and **tmux** are not included in the current installer.
 
 ---
 
-## What's New in v0.4.6
+## Platform Support & Test Status
 
-- Refactored for **Google Shell Style**  
-  Consistent quoting, helper functions, constants, `set -euo pipefail`, and early exits.
-- **BLE and tmux removed**  
-  Simplified shell setup without `ble.sh` or tmux dependencies.  
-  Compatible with PuTTY, Fedora Terminal, and SSH sessions.
-- **Ghostty optional**  
-  Optional terminal installer for Fedora/RHEL (`copr:alternateved/ghostty`) with Dracula theme.  
-  Disabled by default (`ENABLE_GHOSTTY=0`).
-- **Clipboard helpers enabled**  
-  Adds `pbcopy` and `pbpaste` under `~/.local/bin`, ensures `PATH` includes that directory.
-- **Healing re-runs**  
-  Compact and deduplicate configuration files on every run (`.bashrc`, `.vimrc`).
-- **Safer user-scope installs**  
-  All modifications and backups occur under the current user account only.
+* Tested
+
+  * Fedora 42
+
+* Pending testing
+
+  * RHEL: 9.x
+
+* Currently untested
+
+  * Rocky Linux: 9.x
+  * AlmaLinux: 9.x
+  * Ubuntu: 22.04 LTS, 24.04 LTS
+  * Debian: 12 (Bookworm)
+  * Fedora: 41, 40
+  * Linux Mint: 21.x
+  * WSL (Ubuntu/Debian)
+
+> The script is designed to be portable across these families. If something breaks on your distro/version, please open an issue with logs.
+
+---
+
+## What’s New
+
+* No EPEL dependency — works with base repos only.
+* User-scope fallbacks when repos lack packages:
+
+  * `yamllint` via `python3 -m pip install --user yamllint`
+  * Nerd Fonts (default: FiraCode) to `~/.local/share/fonts` + `fc-cache -fv`
+  * `fzf` via `~/.fzf` bootstrap if not in repos
+  * `shellcheck` portable binary to `~/.local/bin`
+  * `shfmt` portable binary to `~/.local/bin`
+* Idempotent, newline-safe updates for `~/.bashrc` and `~/.vimrc` (no duplicate blocks or creeping blank lines).
+* Repo tooling: `Makefile` (ShellCheck/shfmt targets) + `.shellcheckrc`.
 
 ---
 
 ## Features
 
-### Package Installation (Base Repositories Only)
+### Package Installation (base repos only)
 
-| OS Family | Installed Packages |
-|------------|--------------------|
-| Debian/Ubuntu | `vim`, `git`, `fonts-powerline`, `fzf`, `yamllint`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip` |
-| RHEL/Rocky/Fedora | `vim-enhanced`, `git`, `powerline-fonts`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip` |
+* Debian/Ubuntu: `vim`, `git`, `fonts-powerline`, `fzf`, `yamllint`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`
+* RHEL/Rocky/Fedora: `vim-enhanced`, `git`, `powerline-fonts`, `curl`, `make`, `gawk`, `bash-completion`, `python3`, `python3-pip`, `unzip`
 
-If `yamllint` or Powerline fonts are missing, see the fallback section below.
+> If packages are missing in base repos, see **Fallback Behavior**.
 
----
+### Vim
 
-### Vim Configuration
-
-- Installs **Pathogen** and curated plugins:
+* Installs Pathogen and a curated plugin set:
   `vim-airline`, `nerdtree`, `fzf-vim`, `vim-fugitive`, `ale`, `indentLine`, `vim-gitgutter`, `vim-floaterm`, `jinja-4-vim`, `shades-of-purple`
-- Adds one managed block to `~/.vimrc` (sensible defaults, 24-bit color).
-- Re-runs update plugins safely without duplicates.
-
----
+* Appends a single, managed block to `~/.vimrc` (truecolor, sane defaults).
+* Re-runs update plugins idempotently.
 
 ### Linters
 
-- YAML → `yamllint` (system or pip fallback)
-- Bash → `shellcheck`, `shfmt`
-- Python → `ruff`, `pylint` (user-scope pip install)
+* YAML: `yamllint` (repo or pip user fallback) with default config at `~/.config/yamllint/config`
+* Bash: `shellcheck`, `shfmt` (repo or user-scope portable binaries)
+* Python: `ruff` and `pylint` via pip (user-scope; versions configurable)
+
+### Bash Customizations
+
+* Eternal history (`~/.bash_eternal_history`) with timestamps
+* Prompt shows git branch (`__git_ps1` when available; fallback included)
+* bash-completion: system + user-scope
+* fzf: system or user fallback (`~/.fzf`) with keybindings & completion
+* argcomplete: user-scope activation
+* carapace (optional): rich completions if present
+
+### Kubernetes & OpenShift
+
+* Installs `kubectl` and `oc` to `/usr/local/bin` if writable, else to `~/.local/bin`
+* Generates bash completions into `~/.bash_completion.d/`
+
+### Repo Tooling
+
+* Writes `Makefile` with:
+
+  * `check-sh` (bash -n), `lint-sh` (ShellCheck), `fmt-sh` (shfmt)
+* Adds `.shellcheckrc` allowing external sources when paths are validated in code
 
 ---
 
-### Bash Configuration
+## Fallback Behavior (No Extra Repos)
 
-- Eternal history (`~/.bash_eternal_history`) with timestamps
-- Prompt shows current git branch if available
-- System and user bash completion
-- `fzf` with keybindings and completion
-- `argcomplete` enabled for Python CLIs
-- `carapace` integrated if present
+When a package isn’t available in your distro’s **base** repositories, the installer will fall back to a user-scope setup:
 
----
-
-### Kubernetes and OpenShift
-
-- Installs `kubectl` and `oc`
-  - To `/usr/local/bin` if writable, otherwise `~/.local/bin`
-  - Creates bash completions in `~/.bash_completion.d/`
-- Automatically detects CPU architecture (amd64, arm64, etc.)
-
----
-
-### Optional Terminal: Ghostty
-
-- Fedora/RHEL: Installed from `copr:alternateved/ghostty`
-- Dracula theme applied automatically when enabled
-- Disabled by default (`ENABLE_GHOSTTY=0`)
-- Safe to enable only in desktop environments with a window manager
-
----
-
-### Clipboard Helpers
-
-Installs portable `pbcopy` and `pbpaste` wrappers into `~/.local/bin` and ensures `PATH` includes that directory.
-
-Backends:
-- Wayland → `wl-clipboard`
-- X11 → `xclip` or `xsel`
-- WSL → `clip.exe` (paste disabled)
-- macOS → native tools
-
-Example:
-```bash
-echo "hello world" | pbcopy
-pbpaste > output.txt
-````
-
-If no backend is detected, install `wl-clipboard` or `xclip`.
-
----
-
-## Fallback Behavior
-
-If packages are not available in system repositories:
-
-* `yamllint` is installed via:
+* `yamllint` → pip user install
 
   ```bash
   python3 -m pip install --user yamllint
   ```
-* FiraCode Nerd Font installed to:
+
+  Ensures `~/.local/bin` is on your `PATH`.
+
+* Powerline glyphs → installs a Nerd Font (default: FiraCode) to:
 
   ```
   ~/.local/share/fonts
   ```
 
-  and font cache refreshed with:
+  and refreshes font cache with `fc-cache -f`.
+
+* `fzf` → clones bootstrap into:
 
   ```
-  fc-cache -f
+  ~/.fzf
   ```
+
+  and runs its installer with keybindings/completion enabled.
+
+* `shellcheck` → downloads portable binary to:
+
+  ```
+  ~/.local/bin/shellcheck
+  ```
+
+* `shfmt` → downloads portable binary to:
+
+  ```
+  ~/.local/bin/shfmt
+  ```
+
+All fallbacks are **user-owned** and do not require extra repos.
 
 ---
 
@@ -162,14 +150,23 @@ Run:
 ./install_vimrc_etc.sh
 ```
 
-The script is idempotent and safe to re-run.
-Each run compacts configuration files and removes duplicates automatically.
+The script prompts for `sudo` only when needed (packages, `/usr/local/bin`).
+
+---
+
+## After Completion
+
+* Appends/updates blocks in `~/.bashrc` and `~/.vimrc`
+* Creates `~/.config/yamllint/config` if missing
+* Installs/updates tools, fonts, and plugins
+* Ensures `~/.local/bin` is on your `PATH`
+* Sources `~/.bashrc` and suggests `exec bash -l` for a fresh login shell
 
 ---
 
 ## Configuration
 
-Adjust at the top of the script:
+Edit the top of `install_vimrc_etc.sh`:
 
 ```bash
 ENABLE_PACKAGES=1
@@ -183,9 +180,8 @@ ENABLE_PY_LINTERS=1
 ENABLE_KUBECTL_OC=1
 ENABLE_REPO_TOOLING=1
 
-# Optional features
-ENABLE_GHOSTTY=0
-ENABLE_PBTOOLS=1
+CLEAN_OUTPUT=1   # suppress package manager/gitrepo noise
+LOG_FILE=""      # optional log file path (empty = no file log)
 ```
 
 Pin Python linter versions:
@@ -195,30 +191,21 @@ RUFF_VERSION="0.6.5"
 PYLINT_VERSION="3.2.6"
 ```
 
+Optional pins for portable binaries:
+
+```bash
+SHELLCHECK_VERSION=""   # e.g., "v0.10.0" (empty = latest)
+SHFMT_VERSION=""        # e.g., "v3.7.0"  (empty = latest)
+```
+
 ---
 
 ## Requirements
 
-* Bash 4 or newer
-* `sudo` privileges for package installation
-* Internet access for plugin and font downloads
-* `git`, `curl`, `make`, `gawk` (installed if missing)
-* For clipboard support:
-
-  * Wayland → `wl-clipboard`
-  * X11 → `xclip` or `xsel`
-
----
-
-## Troubleshooting
-
-| Issue                              | Solution                                             |
-| ---------------------------------- | ---------------------------------------------------- |
-| `pip3` not found                   | Script installs `python3-pip` or uses `ensurepip`.   |
-| Fonts not rendering                | Select “FiraCode Nerd Font” in terminal preferences. |
-| Duplicate PATH lines               | Re-run script; deduplication removes extra lines.    |
-| Missing `pbcopy`/`pbpaste` backend | Install `wl-clipboard` or `xclip`.                   |
-| Ghostty not launching              | Enable only on desktop systems.                      |
+* Bash 4+
+* `sudo` privileges (for system packages)
+* `git`, `curl`, `make`, `gawk` (auto-installed when possible)
+* Internet access (plugins, fonts, pip packages, portable binaries)
 
 ---
 
@@ -226,23 +213,68 @@ PYLINT_VERSION="3.2.6"
 
 ```text
 [INFO] Dev Bootstrap starting (append-only; no EPEL required)
-[INFO] OS family: redhat (ID=fedora)
-[ OK ] Packages installed (base repos only)
-[ OK ] Pathogen installed
-[ OK ] Vim plugins ready
-[ OK ] Updated ~/.bashrc (history + PATH)
-[ OK ] yamllint installed (user)
+[INFO] OS family: debian (ID=ubuntu)
+[ OK ] Packages installed (system repos only; no EPEL).
+[ OK ] Pathogen installed.
+[ OK ] Vim plugins ready.
+[ OK ] Ensured single managed Vim block in /home/user/.vimrc
+[ OK ] Yamllint config created at /home/user/.config/yamllint/config
+[ OK ] Updated ~/.bashrc (history + prompt)
+[ OK ] argcomplete activated (user-scope)
+[ OK ] shellcheck available
+[ OK ] shfmt available
 [ OK ] ruff installed (0.6.5)
 [ OK ] pylint installed (3.2.6)
 [ OK ] kubectl completion saved to ~/.bash_completion.d/kubectl
 [ OK ] oc completion saved to ~/.bash_completion.d/oc
-[ OK ] pbcopy/pbpaste installed under ~/.local/bin
-[ OK ] All done. For a fresh shell: exec bash -l
+[ OK ] All done. Sourcing ~/.bashrc now (safe).
+[ OK ] Done. For a fresh session, run: exec bash -l
 ```
 
 ---
 
-## Versioning
+## Troubleshooting
 
-This project follows a practical changelog model (no strict semantic versioning).
-See [CHANGELOG.md](./CHANGELOG.md) for details.
+* `pip3` not found
+  Uses `python3 -m ensurepip --upgrade` and installs `python3-pip` via repos if needed.
+
+* `yamllint` missing in repos
+  Installs user-scope via pip; ensures `~/.local/bin` is on `PATH`.
+
+* Powerline glyphs not rendering
+  Select a Nerd Font (e.g., FiraCode Nerd Font) in your terminal profile.
+
+* `fzf` not available in repos
+  The script bootstraps `~/.fzf` and enables keybindings/completion.
+
+* `shellcheck`/`shfmt` missing in repos
+  The script installs portable binaries into `~/.local/bin`.
+
+* Duplicate blocks or extra blank lines
+  Re-run the installer; it compacts and deduplicates safely.
+
+---
+
+## Distro Notes
+
+These are common variations we’ve observed:
+
+* Fedora (some spins/mirrors)
+
+  * `fzf` may be missing or in a different subpackage layout. The installer auto-falls back to `~/.fzf` with keybindings and completion.
+
+* RHEL/Rocky/Alma (base without EPEL)
+
+  * `shellcheck` and `shfmt` may be unavailable. The installer fetches portable binaries into `~/.local/bin`.
+  * `yamllint` may be missing — installed user-scope via pip.
+
+* Debian/Ubuntu minimal images
+
+  * `fonts-powerline` may be missing on some minimal/cloud images — Nerd Font fallback is used.
+  * `pip` may not be present; the installer tries `ensurepip` and then installs `python3-pip` if needed.
+
+* WSL
+
+  * Clipboard helpers: `pbcopy` uses `clip.exe`. `pbpaste` requires an X/Wayland clipboard tool (install `xclip`/`xsel` or `wl-clipboard`) or use Windows-native workflows.
+
+If you hit a package gap that isn’t covered by the fallbacks above, please open an issue including your distro, version, and the log output.
